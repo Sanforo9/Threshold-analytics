@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrainLog · Métricas de entrenamiento</title>
+<meta name="theme-color" content="#0f766e">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{
+  --bg:#f5f7f8;--card:#ffffff;--ink:#14212b;--muted:#5b6b78;--line:#e2e8ec;
+  --accent:#0f766e;--accent2:#f59e0b;--danger:#dc2626;--ok:#16a34a;--grid:#e6ebee;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#0e1418;--card:#161e24;--ink:#e8eef2;--muted:#8fa0ad;--line:#26323b;
+  --accent:#2dd4bf;--accent2:#fbbf24;--grid:#232e36;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid var(--line);background:var(--card);position:sticky;top:0;z-index:5}
+h1{font-size:20px;margin:0;display:flex;align-items:center;gap:8px}
+h1 span.dot{width:12px;height:12px;border-radius:50%;background:var(--accent);display:inline-block}
+main{max-width:1180px;margin:0 auto;padding:20px 24px 60px;display:grid;gap:20px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,select,input,textarea{font:inherit;color:var(--ink)}
+button{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600}
+@media (prefers-color-scheme:dark){button.primary{color:#04201d}}
+button.danger{color:var(--danger)}
+input,select,textarea{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
+label{font-size:12px;color:var(--muted);display:block;margin-bottom:3px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.card h2{font-size:14px;margin:0 0 12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.kpi .v{font-size:26px;font-weight:700}
+.kpi .l{font-size:12px;color:var(--muted)}
+.kpi .s{font-size:12px;margin-top:2px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:20px}
+form{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;align-items:end}
+form .wide{grid-column:span 2}
+canvas{width:100%;height:220px;display:block}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{color:var(--muted);font-weight:600;font-size:12px;cursor:pointer}
+.tablewrap{overflow-x:auto;max-height:380px;overflow-y:auto}
+.bar{height:10px;border-radius:5px;background:var(--accent)}
+.sportrow{display:grid;grid-template-columns:90px 1fr 70px;gap:10px;align-items:center;margin:8px 0;font-size:14px}
+.pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:600}
+.empty{color:var(--muted);text-align:center;padding:40px 10px}
+.hint{font-size:12px;color:var(--muted);margin-top:8px}
+#installBtn{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dot"></span>TrainLog</h1>
+  <div class="row">
+    <select id="range" style="width:auto" title="Rango">
+      <option value="4">Últimas 4 semanas</option>
+      <option value="8">Últimas 8 semanas</option>
+      <option value="12" selected>Últimas 12 semanas</option>
+      <option value="26">Últimas 26 semanas</option>
+      <option value="52">Último año</option>
+    </select>
+    <select id="sportFilter" style="width:auto" title="Deporte"></select>
+    <button id="installBtn" class="primary">⬇ Instalar app</button>
+  </div>
+</header>
+
+<main>
+  <section class="kpis" id="kpis"></section>
+
+  <section class="card">
+    <h2>Registrar sesión</h2>
+    <form id="form">
+      <div><label>Fecha</label><input type="date" id="f_date" required></div>
+      <div><label>Deporte</label><select id="f_sport"></select></div>
+      <div><label>Duración (min)</label><input type="number" id="f_dur" min="1" step="1" required></div>
+      <div><label>Distancia (km)</label><input type="number" id="f_dist" min="0" step="0.01"></div>
+      <div><label>FC media (ppm)</label><input type="number" id="f_hr" min="30" max="230"></div>
+      <div><label>Esfuerzo RPE (1-10)</label><input type="number" id="f_rpe" min="1" max="10" step="0.5" value="5" required></div>
+      <div class="wide"><label>Notas</label><input id="f_notes" placeholder="Sensaciones, clima, ruta…"></div>
+      <div><button class="primary" type="submit" style="width:100%">Guardar</button></div>
+    </form>
+  </section>
+
+  <section class="grid2">
+    <div class="card"><h2>Volumen semanal (horas)</h2><canvas id="cVol"></canvas></div>
+    <div class="card"><h2>Carga semanal (min × RPE)</h2><canvas id="cLoad"></canvas></div>
+    <div class="card"><h2>Ratio agudo:crónico (ACWR)</h2><canvas id="cAcwr"></canvas>
+      <div class="hint">Zona óptima 0.8–1.3. Por encima de 1.5 aumenta el riesgo de sobrecarga. Agudo = carga de la semana; crónico = media de 4 semanas.</div></div>
+    <div class="card"><h2>Ritmo / velocidad por sesión</h2><canvas id="cPace"></canvas>
+      <div class="hint" id="paceHint"></div></div>
+    <div class="card"><h2>Distribución por deporte</h2><div id="sports"></div></div>
+    <div class="card"><h2>FC media vs RPE</h2><canvas id="cHr"></canvas></div>
+  </section>
+
+  <section class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <h2 style="margin:0">Historial</h2>
+      <div class="row">
+        <button id="demo">Cargar datos de ejemplo</button>
+        <button id="exportCsv">Exportar CSV</button>
+        <button id="importBtn">Importar CSV</button>
+        <input type="file" id="importFile" accept=".csv" hidden>
+        <button id="importTrk" class="primary">Importar GPX / TCX</button>
+        <input type="file" id="trkFile" accept=".gpx,.tcx" multiple hidden>
+        <button id="clearAll" class="danger">Borrar todo</button>
+      </div>
+    </div>
+    <div class="tablewrap"><table id="tbl"></table></div>
+    <div class="hint">Tus datos se guardan solo en este dispositivo (almacenamiento local del navegador). Exporta un CSV para respaldarlos.</div>
+  </section>
+</main>
+
+<script>
+(() => {
+const SPORTS = ["Carrera","Ciclismo","Natación","Gimnasio","Otro"];
+const SPEED_SPORTS = {Carrera:"pace",Natación:"pace100",Ciclismo:"speed"};
+const KEY = "trainlog.sessions.v1";
+const $ = id => document.getElementById(id);
+let sessions = [];
+try { sessions = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch(e){ sessions = []; }
+let sortKey = "date", sortDir = -1;
+
+const save = () => { try{ localStorage.setItem(KEY, JSON.stringify(sessions)); }catch(e){} };
+const iso = d => { const z=new Date(d.getTime()-d.getTimezoneOffset()*60000); return z.toISOString().slice(0,10); };
+const parseD = s => { const [y,m,d]=s.split("-").map(Number); return new Date(y,m-1,d); };
+const weekStart = d => { const x=new Date(d); const wd=(x.getDay()+6)%7; x.setDate(x.getDate()-wd); x.setHours(0,0,0,0); return x; };
+const fmt1 = n => (Math.round(n*10)/10).toLocaleString("es");
+const load = s => s.dur * s.rpe;
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+// ---- setup selects
+for (const id of ["f_sport"]) $(id).innerHTML = SPORTS.map(s=>`<option>${s}</option>`).join("");
+$("sportFilter").innerHTML = `<option value="">Todos los deportes</option>` + SPORTS.map(s=>`<option>${s}</option>`).join("");
+$("f_date").value = iso(new Date());
+
+// ---- data helpers
+function filtered(){
+  const weeks = +$("range").value, sp = $("sportFilter").value;
+  const from = weekStart(new Date()); from.setDate(from.getDate() - 7*(weeks-1));
+  return sessions.filter(s => parseD(s.date) >= from && (!sp || s.sport === sp));
+}
+function weekly(weeks){
+  const sp = $("sportFilter").value;
+  const start = weekStart(new Date()); start.setDate(start.getDate() - 7*(weeks-1));
+  const arr = Array.from({length:weeks},(_,i)=>{const d=new Date(start); d.setDate(d.getDate()+7*i); return {start:d,hours:0,load:0,km:0,n:0};});
+  for(const s of sessions){
+    if(sp && s.sport!==sp) continue;
+    const idx = Math.floor((weekStart(parseD(s.date)) - start)/(7*864e5));
+    if(idx>=0 && idx<weeks){ const w=arr[idx]; w.hours+=s.dur/60; w.load+=load(s); w.km+=s.dist||0; w.n++; }
+  }
+  return arr;
+}
+const wl = d => d.toLocaleDateString("es",{day:"2-digit",month:"short"});
+
+// ---- charts
+function setup(canvas){
+  const dpr = window.devicePixelRatio||1, r = canvas.getBoundingClientRect();
+  canvas.width = r.width*dpr; canvas.height = r.height*dpr;
+  const g = canvas.getContext("2d"); g.scale(dpr,dpr);
+  return {g,w:r.width,h:r.height};
+}
+function axes(g,w,h,pad,maxV,fmt=v=>fmt1(v)){
+  g.strokeStyle=css("--grid"); g.fillStyle=css("--muted"); g.font="11px system-ui"; g.lineWidth=1; g.textAlign="right";
+  for(let i=0;i<=4;i++){
+    const y = pad.t + (h-pad.t-pad.b)*(1-i/4);
+    g.beginPath(); g.moveTo(pad.l,y); g.lineTo(w-pad.r,y); g.stroke();
+    g.fillText(fmt(maxV*i/4), pad.l-6, y+4);
+  }
+}
+function empty(g,w,h,msg="Sin datos en este rango"){
+  g.fillStyle=css("--muted"); g.font="13px system-ui"; g.textAlign="center"; g.fillText(msg,w/2,h/2);
+}
+function bars(canvas,labels,vals,color){
+  const {g,w,h}=setup(canvas); const pad={l:42,r:8,t:10,b:24};
+  if(!vals.some(v=>v>0)) return empty(g,w,h);
+  const max=Math.max(...vals)*1.1||1; axes(g,w,h,pad,max);
+  const bw=(w-pad.l-pad.r)/vals.length;
+  vals.forEach((v,i)=>{
+    const bh=(h-pad.t-pad.b)*v/max;
+    g.fillStyle=color; g.fillRect(pad.l+i*bw+bw*.15, h-pad.b-bh, bw*.7, bh);
+    if(vals.length<=14 || i%Math.ceil(vals.length/10)===0){
+      g.fillStyle=css("--muted"); g.textAlign="center"; g.font="10px system-ui"; g.fillText(labels[i],pad.l+i*bw+bw/2,h-8);
+    }
+  });
+}
+function line(canvas,labels,vals,color,opts={}){
+  const {g,w,h}=setup(canvas); const pad={l:42,r:10,t:10,b:24};
+  const pts=vals.map((v,i)=>({v,i})).filter(p=>p.v!=null && isFinite(p.v));
+  if(!pts.length) return empty(g,w,h,opts.emptyMsg);
+  let min=opts.min??0, max=Math.max(opts.max??0,...pts.map(p=>p.v))*1.1;
+  if(opts.autoMin){min=Math.min(...pts.map(p=>p.v))*0.9;}
+  const span=max-min||1;
+  g.save(); // axes with custom min
+  g.strokeStyle=css("--grid"); g.fillStyle=css("--muted"); g.font="11px system-ui"; g.textAlign="right";
+  for(let i=0;i<=4;i++){const y=pad.t+(h-pad.t-pad.b)*(1-i/4);g.beginPath();g.moveTo(pad.l,y);g.lineTo(w-pad.r,y);g.stroke();g.fillText((opts.fmt||fmt1)(min+span*i/4),pad.l-6,y+4);}
+  g.restore();
+  const X=i=>pad.l+(vals.length===1?(w-pad.l-pad.r)/2:(w-pad.l-pad.r)*i/(vals.length-1));
+  const Y=v=>pad.t+(h-pad.t-pad.b)*(1-(v-min)/span);
+  if(opts.band){ g.fillStyle="rgba(22,163,74,.12)"; g.fillRect(pad.l,Y(opts.band[1]),w-pad.l-pad.r,Y(opts.band[0])-Y(opts.band[1])); }
+  g.strokeStyle=color; g.lineWidth=2; g.beginPath();
+  pts.forEach((p,k)=>k?g.lineTo(X(p.i),Y(p.v)):g.moveTo(X(p.i),Y(p.v))); g.stroke();
+  g.fillStyle=color; pts.forEach(p=>{g.beginPath();g.arc(X(p.i),Y(p.v),3,0,7);g.fill();});
+  g.fillStyle=css("--muted"); g.textAlign="center"; g.font="10px system-ui";
+  const step=Math.ceil(vals.length/8);
+  labels.forEach((l,i)=>{ if(i%step===0) g.fillText(l,X(i),h-8); });
+}
+function scatter(canvas,pts,color){
+  const {g,w,h}=setup(canvas); const pad={l:42,r:10,t:10,b:28};
+  if(!pts.length) return empty(g,w,h,"Sin sesiones con FC");
+  const xs=pts.map(p=>p.x), ys=pts.map(p=>p.y);
+  const x0=0, x1=10.5, y0=Math.min(...ys)*0.95, y1=Math.max(...ys)*1.05, ysp=y1-y0||1;
+  g.strokeStyle=css("--grid"); g.fillStyle=css("--muted"); g.font="11px system-ui"; g.textAlign="right";
+  for(let i=0;i<=4;i++){const y=pad.t+(h-pad.t-pad.b)*(1-i/4);g.beginPath();g.moveTo(pad.l,y);g.lineTo(w-pad.r,y);g.stroke();g.fillText(Math.round(y0+ysp*i/4),pad.l-6,y+4);}
+  g.textAlign="center"; for(let r=1;r<=10;r+=1){const x=pad.l+(w-pad.l-pad.r)*r/x1; g.fillText(r,x,h-12);}
+  g.fillText("RPE",w/2,h-1);
+  g.fillStyle=color; g.globalAlpha=.7;
+  pts.forEach(p=>{g.beginPath();g.arc(pad.l+(w-pad.l-pad.r)*p.x/x1, pad.t+(h-pad.t-pad.b)*(1-(p.y-y0)/ysp),5,0,7);g.fill();});
+  g.globalAlpha=1;
+}
+
+// ---- render
+function render(){
+  const weeks=+$("range").value, list=filtered();
+  const totH=list.reduce((a,s)=>a+s.dur,0)/60, totK=list.reduce((a,s)=>a+(s.dist||0),0);
+  const totL=list.reduce((a,s)=>a+load(s),0);
+  const hrs=list.filter(s=>s.hr); const avgHr=hrs.length?hrs.reduce((a,s)=>a+s.hr,0)/hrs.length:null;
+  const avgRpe=list.length?list.reduce((a,s)=>a+s.rpe,0)/list.length:null;
+  const W=weekly(weeks); const last=W[W.length-1], prev=W[W.length-2];
+  const chronic = W.slice(-4).reduce((a,w)=>a+w.load,0)/Math.min(4,W.length);
+  const acwr = chronic>0 ? last.load/chronic : null;
+  let acwrTag="";
+  if(acwr!=null){
+    const [txt,col]= acwr<0.8?["Baja","#f59e0b"]:acwr<=1.3?["Óptima","#16a34a"]:acwr<=1.5?["Alta","#f59e0b"]:["Riesgo","#dc2626"];
+    acwrTag=`<span class="pill" style="background:${col}22;color:${col}">${txt}</span>`;
+  }
+  const delta=(a,b)=> b>0 ? ((a-b)/b*100) : null;
+  const dl = prev? delta(last.load,prev.load):null;
+  $("kpis").innerHTML = [
+    ["Sesiones",list.length,`${fmt1(list.length/weeks)}/semana`],
+    ["Tiempo total",fmt1(totH)+" h",`${fmt1(totH/weeks)} h/semana`],
+    ["Distancia",fmt1(totK)+" km",`${fmt1(totK/weeks)} km/semana`],
+    ["Carga total",Math.round(totL).toLocaleString("es"),dl!=null?`Esta semana ${dl>=0?"▲":"▼"} ${Math.abs(Math.round(dl))}% vs anterior`:"—"],
+    ["ACWR",acwr!=null?acwr.toFixed(2):"—",acwrTag],
+    ["FC media",avgHr?Math.round(avgHr)+" ppm":"—",avgRpe?`RPE medio ${fmt1(avgRpe)}`:""],
+  ].map(([l,v,s])=>`<div class="card kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join("");
+
+  const labels=W.map(w=>wl(w.start));
+  bars($("cVol"),labels,W.map(w=>w.hours),css("--accent"));
+  bars($("cLoad"),labels,W.map(w=>w.load),css("--accent2"));
+  const ac=W.map((w,i)=>{const ch=W.slice(Math.max(0,i-3),i+1).reduce((a,x)=>a+x.load,0)/Math.min(4,i+1);return ch>0&&i>=1?w.load/ch:null;});
+  line($("cAcwr"),labels,ac,css("--accent"),{min:0,max:2,band:[0.8,1.3],fmt:v=>v.toFixed(1)});
+
+  // pace/speed
+  const sp=$("sportFilter").value;
+  const target = SPEED_SPORTS[sp] ? sp : (list.some(s=>s.sport==="Carrera"&&s.dist>0)?"Carrera":(list.find(s=>SPEED_SPORTS[s.sport]&&s.dist>0)||{}).sport);
+  const ps = target? list.filter(s=>s.sport===target && s.dist>0).sort((a,b)=>a.date<b.date?-1:1):[];
+  const kind=SPEED_SPORTS[target];
+  const val=s=> kind==="speed"? s.dist/(s.dur/60) : kind==="pace100"? s.dur/(s.dist*10) : s.dur/s.dist;
+  const pf = v => { if(kind==="speed") return fmt1(v); const m=Math.floor(v), sec=Math.round((v-m)*60); return `${m}:${String(sec).padStart(2,"0")}`; };
+  line($("cPace"),ps.map(s=>wl(parseD(s.date))),ps.map(val),css("--accent"),{autoMin:true,fmt:pf,emptyMsg:"Registra sesiones con distancia"});
+  $("paceHint").textContent = target ? ({pace:"Carrera: min/km (menor es más rápido)",pace100:"Natación: min/100 m (menor es más rápido)",speed:"Ciclismo: km/h (mayor es más rápido)"})[kind] : "";
+
+  // sports distribution
+  const by={}; list.forEach(s=>{by[s.sport]=by[s.sport]||{h:0,n:0}; by[s.sport].h+=s.dur/60; by[s.sport].n++;});
+  const maxH=Math.max(0,...Object.values(by).map(x=>x.h));
+  $("sports").innerHTML = Object.keys(by).length ? Object.entries(by).sort((a,b)=>b[1].h-a[1].h).map(([k,v])=>
+    `<div class="sportrow"><span>${k}</span><div><div class="bar" style="width:${v.h/maxH*100}%"></div></div><span>${fmt1(v.h)} h · ${v.n}</span></div>`).join("")
+    : `<div class="empty">Sin datos en este rango</div>`;
+
+  scatter($("cHr"),hrs.map(s=>({x:s.rpe,y:s.hr})),css("--accent"));
+
+  // table
+  const rows=[...sessions].filter(s=>!sp||s.sport===sp).sort((a,b)=>{
+    const x=a[sortKey]??"", y=b[sortKey]??""; return (x>y?1:x<y?-1:0)*sortDir;});
+  const cols=[["date","Fecha"],["sport","Deporte"],["dur","Min"],["dist","Km"],["hr","FC"],["rpe","RPE"],["load","Carga"],["notes","Notas"]];
+  $("tbl").innerHTML = `<thead><tr>${cols.map(([k,l])=>`<th data-k="${k}">${l}${sortKey===k?(sortDir>0?" ▲":" ▼"):""}</th>`).join("")}<th></th></tr></thead><tbody>`+
+    (rows.length? rows.map(s=>`<tr><td>${s.date}</td><td>${s.sport}</td><td>${s.dur}</td><td>${s.dist||"—"}</td><td>${s.hr||"—"}</td><td>${s.rpe}</td><td>${Math.round(load(s))}</td><td>${esc(s.notes||"")}</td><td><button class="danger" data-del="${s.id}">✕</button></td></tr>`).join("")
+    : `<tr><td colspan="9" class="empty">Aún no hay sesiones. Registra la primera arriba o carga los datos de ejemplo.</td></tr>`)+`</tbody>`;
+}
+const esc = s => s.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+sessions.forEach(s=>{ s.load=undefined; });
+
+// ---- events
+$("form").addEventListener("submit",e=>{
+  e.preventDefault();
+  sessions.push({
+    id:Date.now()+Math.random().toString(36).slice(2,6),
+    date:$("f_date").value, sport:$("f_sport").value,
+    dur:+$("f_dur").value, dist:+$("f_dist").value||0,
+    hr:+$("f_hr").value||0, rpe:+$("f_rpe").value, notes:$("f_notes").value.trim()
+  });
+  save(); ["f_dur","f_dist","f_hr","f_notes"].forEach(i=>$(i).value=""); render();
+});
+$("tbl").addEventListener("click",e=>{
+  const k=e.target.closest("th")?.dataset.k;
+  if(k){ if(sortKey===k) sortDir*=-1; else {sortKey=k;sortDir=-1;} return render(); }
+  const id=e.target.dataset.del;
+  if(id){ sessions=sessions.filter(s=>s.id!==id); save(); render(); }
+});
+$("range").onchange=$("sportFilter").onchange=render;
+window.addEventListener("resize",()=>{clearTimeout(window._rt);window._rt=setTimeout(render,120);});
+matchMedia("(prefers-color-scheme:dark)").addEventListener("change",render);
+
+$("demo").onclick=()=>{
+  if(sessions.length && !confirm("Se añadirán sesiones de ejemplo a tus datos. ¿Continuar?")) return;
+  const today=new Date();
+  for(let d=84; d>=0; d--){
+    const dt=new Date(today); dt.setDate(dt.getDate()-d); const wd=dt.getDay();
+    const wk=Math.floor((84-d)/7), prog=1+wk*0.015, deload=(wk%4===3)?0.7:1;
+    const add=(sport,dur,dist,hr,rpe,notes="")=>sessions.push({id:"demo"+d+sport,date:iso(dt),sport,dur:Math.round(dur*prog*deload),dist:dist?+(dist*prog*deload).toFixed(2):0,hr,rpe,notes});
+    const j=()=>(Math.random()-.5);
+    if(wd===2) add("Carrera",45+j()*8,8+j(),148+j()*8,6,"Rodaje");
+    if(wd===4) add("Carrera",55+j()*8,10.5+j(),160+j()*8,8,"Series");
+    if(wd===6) add("Carrera",90+j()*15,16+j()*2,150+j()*6,7,"Tirada larga");
+    if(wd===1) add("Gimnasio",50,0,125+j()*8,6,"Fuerza");
+    if(wd===3 && Math.random()>.4) add("Ciclismo",70+j()*10,28+j()*4,138+j()*6,5);
+    if(wd===0 && Math.random()>.6) add("Natación",40,1.6,130+j()*6,5);
+  }
+  save(); render();
+};
+$("exportCsv").onclick=()=>{
+  const head="date,sport,duration_min,distance_km,hr_avg,rpe,notes";
+  const q=v=>`"${String(v??"").replace(/"/g,'""')}"`;
+  const csv=[head,...sessions.map(s=>[s.date,s.sport,s.dur,s.dist,s.hr,s.rpe,q(s.notes)].join(","))].join("\n");
+  const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+  a.download=`trainlog-${iso(new Date())}.csv`; a.click(); URL.revokeObjectURL(a.href);
+};
+$("importBtn").onclick=()=>$("importFile").click();
+$("importFile").onchange=async e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const lines=(await f.text()).split(/\r?\n/).filter(Boolean).slice(1); let n=0;
+  for(const ln of lines){
+    const c=ln.match(/("([^"]|"")*"|[^,]*)(,|$)/g)?.map(x=>x.replace(/,$/,"").replace(/^"|"$/g,"").replace(/""/g,'"'))||[];
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(c[0]||"")) continue;
+    sessions.push({id:Date.now()+"i"+n++,date:c[0],sport:SPORTS.includes(c[1])?c[1]:"Otro",dur:+c[2]||0,dist:+c[3]||0,hr:+c[4]||0,rpe:+c[5]||5,notes:c[6]||""});
+  }
+  save(); render(); e.target.value=""; alert(`${n} sesiones importadas`);
+};
+// ---- GPX / TCX import
+const haversine=(a,b)=>{const R=6371,t=x=>x*Math.PI/180,dLa=t(b.lat-a.lat),dLo=t(b.lon-a.lon);
+  const h=Math.sin(dLa/2)**2+Math.cos(t(a.lat))*Math.cos(t(b.lat))*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.sqrt(h));};
+function guessSport(t){ t=(t||"").toLowerCase();
+  if(/run|carrera|correr|trail/.test(t)) return "Carrera";
+  if(/bik|cycl|ride|ciclis/.test(t)) return "Ciclismo";
+  if(/swim|nata/.test(t)) return "Natación";
+  if(/strength|gym|weight/.test(t)) return "Gimnasio"; return null; }
+function parseTrack(text,name){
+  const doc=new DOMParser().parseFromString(text,"application/xml");
+  if(doc.querySelector("parsererror")) throw new Error("XML inválido");
+  const q=(root,tag)=>[...root.getElementsByTagName(tag)];
+  let pts=[],sport=null,hrs=[],date=null,dur=null,dist=null;
+  const act=q(doc,"Activity")[0];
+  if(act){ // TCX
+    sport=guessSport(act.getAttribute("Sport"));
+    q(doc,"Trackpoint").forEach(tp=>{
+      const t=q(tp,"Time")[0]?.textContent, la=q(tp,"LatitudeDegrees")[0]?.textContent, lo=q(tp,"LongitudeDegrees")[0]?.textContent;
+      const hr=q(tp,"Value")[0]?.textContent, d=q(tp,"DistanceMeters")[0]?.textContent;
+      pts.push({t:t?new Date(t):null,lat:la!=null?+la:null,lon:lo!=null?+lo:null,hr:hr?+hr:null,d:d?+d/1000:null});
+    });
+    const laps=q(doc,"Lap");
+    const tt=laps.reduce((a,l)=>a+(+q(l,"TotalTimeSeconds")[0]?.textContent||0),0);
+    const dm=laps.reduce((a,l)=>a+(+q(l,"DistanceMeters")[0]?.textContent||0),0);
+    if(tt) dur=tt/60; if(dm) dist=dm/1000;
+    const id=q(act,"Id")[0]?.textContent; if(id) date=new Date(id);
+  } else if(q(doc,"trkpt").length){ // GPX
+    sport=guessSport(q(doc,"type")[0]?.textContent||q(doc,"name")[0]?.textContent||name);
+    q(doc,"trkpt").forEach(p=>{
+      const t=q(p,"time")[0]?.textContent, hr=q(p,"hr")[0]?.textContent;
+      pts.push({t:t?new Date(t):null,lat:+p.getAttribute("lat"),lon:+p.getAttribute("lon"),hr:hr?+hr:null,d:null});
+    });
+  } else throw new Error("No se encontraron datos de actividad");
+  const times=pts.map(p=>p.t).filter(Boolean);
+  if(dur==null && times.length>1) dur=(Math.max(...times)-Math.min(...times))/60000;
+  if(!date && times.length) date=times[0];
+  if(dist==null){
+    const withD=pts.filter(p=>p.d!=null);
+    if(withD.length) dist=Math.max(...withD.map(p=>p.d));
+    else { let s=0; for(let i=1;i<pts.length;i++) if(pts[i].lat!=null&&pts[i-1].lat!=null) s+=haversine(pts[i-1],pts[i]); dist=s; }
+  }
+  pts.forEach(p=>{ if(p.hr) hrs.push(p.hr); });
+  const hr=hrs.length?Math.round(hrs.reduce((a,b)=>a+b,0)/hrs.length):0;
+  if(!date||!dur) throw new Error("Faltan fechas/tiempos en el archivo");
+  if(!sport){ const sp=dist/(dur/60); sport = sp>16?"Ciclismo":sp>=5?"Carrera":"Otro"; }
+  return {date:iso(date),sport,dur:Math.round(dur),dist:+dist.toFixed(2),hr};
+}
+$("importTrk").onclick=()=>$("trkFile").click();
+$("trkFile").onchange=async e=>{
+  let ok=0,fail=[];
+  for(const f of e.target.files){
+    try{
+      const r=parseTrack(await f.text(),f.name);
+      const rpeIn=prompt(`${f.name}\n${r.sport} · ${r.dur} min · ${r.dist} km${r.hr?` · FC ${r.hr}`:""}\n\nEsfuerzo percibido (RPE 1-10):`,"6");
+      if(rpeIn===null) continue;
+      sessions.push({id:Date.now()+"g"+ok,...r,rpe:Math.min(10,Math.max(1,+rpeIn||6)),notes:f.name});
+      ok++;
+    }catch(err){ fail.push(`${f.name}: ${err.message}`); }
+  }
+  save(); render(); e.target.value="";
+  if(ok||fail.length) alert(`${ok} actividad(es) importada(s).`+(fail.length?`\n\nNo se pudieron leer:\n${fail.join("\n")}\n\n(FIT aún no es compatible; expórtalo a TCX/GPX.)`:""));
+};
+
+$("clearAll").onclick=()=>{ if(confirm("¿Borrar todas las sesiones? Esta acción no se puede deshacer.")){sessions=[];save();render();} };
+
+// ---- PWA
+let deferred;
+window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferred=e;$("installBtn").style.display="inline-block";});
+$("installBtn").onclick=async()=>{ if(!deferred) return; deferred.prompt(); await deferred.userChoice; deferred=null; $("installBtn").style.display="none"; };
+window.addEventListener("appinstalled",()=>{$("installBtn").style.display="none";});
+if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+
+render();
+})();
+</script>
+</body>
+</html>
