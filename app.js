@@ -185,6 +185,16 @@ const GLOSSARY = `<details><summary>¿Qué significa cada métrica?</summary>
 <p><b>CTL / ATL / TSB:</b> forma crónica (42 d), fatiga aguda (7 d) y balance entre ambas. Necesitan semanas de histórico para ser fiables.</p>
 <p><b>ACWR:</b> carga de la semana frente a la media de las últimas 4 semanas. Entre 0,8 y 1,3 es la zona óptima.</p>
 <p class="muted">Todo son estimaciones orientativas a partir de los archivos; no sustituyen la valoración de un entrenador o médico.</p></details>`;
+function summaryHtml(S) {
+  const icon = { ok: '✅', warn: '⚠️', bad: '🔴', info: 'ℹ️' }[S.level] || 'ℹ️';
+  return `<div class="sum ${S.level}"><div class="lab">Conclusión general</div><div class="sh">${icon} ${esc(S.headline)}</div>
+    ${S.points.length ? `<ul>${S.points.map(p => `<li><i class="${p.level}"></i><span><b>${esc(p.label)}</b>${esc(p.text)}</span></li>`).join('')}</ul>` : ''}
+    <div class="adv"><b>Qué hacer ahora:</b> ${esc(S.advice)}</div>
+    ${S.caveat ? `<div class="hint">${esc(S.caveat)}</div>` : ''}
+    <div class="row" style="margin-top:8px"><button class="btn sm" id="copySum">Copiar conclusión</button></div></div>`;
+}
+function summaryText(S, title) { return title + '\n' + S.headline + '\n' + S.points.map(p => '- ' + p.label + ': ' + p.text).join('\n') + '\nQué hacer ahora: ' + S.advice + (S.caveat ? '\n(' + S.caveat + ')' : ''); }
+let lastSummary = '';
 const completeBtn = list => hasEstimates(list) ? `<div class="row" style="margin-top:8px"><button class="btn sm primary" data-go="perfil">Completar datos del deportista</button></div>` : '';
 function noAthlete() {
   return `<div class="card"><h3>Empieza subiendo sesiones</h3><p class="muted">Sube los archivos de uno o varios deportistas. La app te pedirá sus datos (FC máxima, reposo, umbral y FTP) para ajustar el análisis a cada uno. Puedes cambiar de deportista con el selector de arriba y usar <b>Limpiar</b> para empezar de nuevo.</p></div>` + dropzone();
@@ -229,6 +239,7 @@ function viewActividad() {
   const hist = list.filter(a => a.start <= act.start);
   return `<div class="row sb"><div><h3>${SPORT_ICON[act.sport]} ${C.SPORTS[act.sport]} · ${esc(dateStr(act.start))}</h3><div class="muted">Deportista: <b>${esc(at.name)}</b> · ${esc(act.name)}</div></div>
     <div class="row"><select id="selAct" style="width:auto;max-width:320px">${opts}</select><select id="selSport" style="width:auto" title="Cambiar deporte">${sports}</select><button class="btn danger sm" id="delAct">Eliminar</button></div></div>
+    ${(() => { const S = C.activityOverview(act, hist); lastSummary = summaryText(S, at.name + ' · ' + C.SPORTS[act.sport] + ' ' + new Date(act.start).toLocaleDateString('es')); return summaryHtml(S); })()}
     <div class="kpis">${kpis}</div>
     <div class="card"><h2>Conclusiones de la sesión</h2>${insHtml(C.activityInsights(act, hist))}${completeBtn([act])}${GLOSSARY}</div>
     <div class="card"><h2>Frecuencia cardíaca y esfuerzo</h2><canvas id="cMain"></canvas></div>
@@ -257,6 +268,7 @@ function viewSemana() {
   const rows = W.acts.slice().reverse().map(a => `<tr class="click" data-open="${a.id}"><td>${esc(new Date(a.start).toLocaleDateString('es', { weekday: 'short', day: 'numeric' }))}</td><td>${SPORT_ICON[a.sport]} ${C.SPORTS[a.sport]}</td><td>${fmtDur(a.A.dur)}</td><td>${a.A.hasSp ? f1(a.A.dist / 1000) + ' km' : '—'}</td><td>${f0(a.A.avgHr)}</td><td>${f0(a.A.load)}</td><td>${f2(a.A.IF)}</td><td>${a.A.decoupling && a.A.decoupling.valid ? f1(a.A.decoupling.pct) + ' %' : '—'}</td></tr>`).join('');
   return `<div class="row sb"><div class="row"><button class="btn sm" id="wkPrev">◀</button><h3 style="margin:0">${esc(at.name)} · semana ${esc(rangeStr(state.wk))}</h3><button class="btn sm" id="wkNext">▶</button></div>
     <div class="row"><button class="btn sm" id="wkNow">Última semana con datos</button></div></div>
+    ${(() => { const S = C.weekOverview(W); lastSummary = summaryText(S, at.name + ' · semana ' + rangeStr(state.wk)); return summaryHtml(S); })()}
     <div class="kpis">${kpis}</div>
     <div class="card"><h2>Conclusiones de la semana</h2>${insHtml(C.weekInsights(W, profileOf(at.id)))}${completeBtn(W.acts)}${GLOSSARY}</div>
     <div class="grid2"><div class="card"><h2>Carga por día</h2><canvas id="cDaily"></canvas></div>
@@ -337,6 +349,7 @@ function bind() {
   const drop = $('drop'); if (drop) drop.onclick = () => $('files').click();
   document.querySelectorAll('[data-open]').forEach(r => r.onclick = () => { state.sel = r.dataset.open; setTab('actividad'); });
   document.querySelectorAll('[data-ath]').forEach(r => r.onclick = () => { state.cur = r.dataset.ath; saveAthletes(); selectLatest(); render(); });
+  const cs = $('copySum'); if (cs) cs.onclick = async () => { try { await navigator.clipboard.writeText(lastSummary); toast('Conclusión copiada.'); } catch (e) { toast('No se pudo copiar automáticamente.'); } };
   const sa = $('selAct'); if (sa) sa.onchange = () => { state.sel = sa.value; render(); };
   const ss = $('selSport'); if (ss) ss.onchange = async () => { const a = state.acts.find(x => x.id === state.sel); a.sport = ss.value; analyzeAthlete(a.ath); await persist(a); render(); };
   const da = $('delAct'); if (da) da.onclick = async () => { if (!confirm('¿Eliminar esta sesión?')) return; await removeActs([state.sel]); selectLatest(); render(); };

@@ -73,6 +73,18 @@ tr.click{cursor:pointer}tr.click:hover{background:var(--infobg)}
 details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-weight:600}
 details p{margin:6px 0}
 #install{display:none}
+.sum{border:1px solid var(--line);border-left:6px solid var(--info);border-radius:12px;background:var(--card);padding:16px 18px}
+.sum.ok{border-left-color:var(--ok)}.sum.warn{border-left-color:var(--warn)}.sum.bad{border-left-color:var(--bad)}
+.sum .sh{font-size:19px;font-weight:700;line-height:1.35;margin:2px 0 10px}
+.sum .lab{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.sum ul{list-style:none;margin:8px 0 12px;padding:0}
+.sum li{display:flex;gap:10px;padding:5px 0;border-top:1px solid var(--line)}
+.sum li:first-child{border-top:0}
+.sum li i{flex:0 0 10px;height:10px;border-radius:50%;margin-top:7px;background:var(--info)}
+.sum li i.ok{background:var(--ok)}.sum li i.warn{background:var(--warn)}.sum li i.bad{background:var(--bad)}
+.sum li b{min-width:180px;display:inline-block;padding-right:8px}
+@media (max-width:620px){.sum li b{display:block;min-width:0}}
+.sum .adv{background:var(--bg);border-radius:8px;padding:10px 12px}
 .mbg{position:fixed;inset:0;background:rgba(10,18,24,.55);z-index:40;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:30px 14px}
 .modal{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;max-width:760px;width:100%}
 .modal h3{margin:0 0 4px;font-size:18px}
