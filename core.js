@@ -36,12 +36,19 @@ function addDays(k, n) { const d = keyToDate(k); d.setDate(d.getDate() + n); ret
 function daysBetween(a, b) { return Math.round((keyToDate(b) - keyToDate(a)) / 864e5); }
 
 /* ---------- perfil ---------- */
-function normProfile(p) {
-  const o = Object.assign({ hrMax: 190, hrRest: 55, lthr: 0, ftp: 0, sex: 'm' }, p || {});
-  o.hrMax = +o.hrMax || 190; o.hrRest = +o.hrRest || 55; o.ftp = +o.ftp || 0;
-  o.lthrAuto = !(+o.lthr > 0);
-  o.lthr = +o.lthr > 0 ? +o.lthr : Math.round(o.hrMax * 0.9);
+function normProfile(p, observedMax) {
+  const o = Object.assign({ hrMax: 0, hrRest: 0, lthr: 0, ftp: 0, sex: 'm' }, p || {});
+  o.hrMaxAuto = !(+o.hrMax > 0);
+  o.hrMax = +o.hrMax > 0 ? +o.hrMax : (observedMax >= 120 ? Math.round(observedMax) : 190);
+  o.hrRestAuto = !(+o.hrRest > 0); o.hrRest = +o.hrRest > 0 ? +o.hrRest : 60;
+  o.ftp = +o.ftp || 0;
+  o.lthrAuto = !(+o.lthr > 0); o.lthr = +o.lthr > 0 ? +o.lthr : Math.round(o.hrMax * 0.9);
   return o;
+}
+function observedMaxHr(rs) {
+  const h = movAvg(rs.s.hr, 5, 0.6); let m = 0;
+  for (const v of h) if (isNum(v) && v > m) m = v;
+  return m;
 }
 
 /* ---------- lector FIT ---------- */
@@ -284,7 +291,7 @@ function normalizedPower(pw) {
 }
 function analyze(rs, sport, rrAll, profileIn) {
   const P = normProfile(profileIn), { n, s } = rs;
-  const A = { sport, profile: { hrMax: P.hrMax, hrRest: P.hrRest, lthr: P.lthr, ftp: P.ftp } };
+  const A = { sport, profile: { hrMax: P.hrMax, hrRest: P.hrRest, lthr: P.lthr, ftp: P.ftp, hrMaxAuto: P.hrMaxAuto, hrRestAuto: P.hrRestAuto, lthrAuto: P.lthrAuto } };
   const cnt = a => { let c = 0; for (let i = 0; i < a.length; i++) if (isNum(a[i])) c++; return c; };
   const hrN = cnt(s.hr), pwN = cnt(s.pw), spN = cnt(s.sp);
   A.hasHr = hrN > n * 0.5; A.hasPw = pwN > n * 0.5 && mean(s.pw) > 5; A.hasSp = spN > n * 0.3 && mean(s.sp) > 0.3;
@@ -443,6 +450,7 @@ function weekSummary(acts, wk) {
     W.acuteLoad = block(0); W.chronicWeekly = mean([0, 1, 2, 3].map(block));
     W.acwr = W.chronicWeekly > 0 ? W.acuteLoad / W.chronicWeekly : NaN;
     W.acwrReliable = W.historyDays >= 28;
+    if (W.historyDays < 14) W.acwr = NaN; // con tan poco histórico no tiene sentido
   }
   W.bySport = {};
   for (const sp of Object.keys(SPORTS)) {
@@ -470,7 +478,7 @@ const f2 = v => nz(Math.round(v * 100) / 100).toLocaleString('es', { minimumFrac
 function loadBand(l) {
   if (l < 150) return ['baja', 'Suele dejar poca fatiga residual; recuperas con normalidad al día siguiente.'];
   if (l < 300) return ['media', 'Puede dejar algo de fatiga al día siguiente; una sesión suave o descanso la absorbe.'];
-  if (l < 450) return ['alta', 'Suele dejar fatiga residual 1-2 días; conviene planificar sesiones fáciles después.'];
+  if (l < 450) return ['alta', 'Suele dejar fatiga residual 1-2 días; conviene planificar sesiones fáciles a continuación.'];
   return ['muy alta', 'Es una carga muy elevada: es habitual necesitar varios días para recuperar del todo.'];
 }
 function activityInsights(act, history) {
@@ -490,8 +498,8 @@ function activityInsights(act, history) {
     const dom = pct.indexOf(Math.max(...pct));
     const hi = pct[3] + pct[4];
     let t = 'Mayor parte del tiempo en ' + ZN[dom] + ' (' + f0(pct[dom]) + ' %). ';
-    if (hi >= 20) t += 'Pasaste ' + f0(hi) + ' % en Z4-Z5 (' + f0((A.zones[3] + A.zones[4]) / 60) + ' min): estímulo de calidad que pide recuperación.'; else if (pct[0] + pct[1] >= 80) t += 'Más del 80 % en Z1-Z2: sesión aeróbica de bajo estrés.'; else t += 'Mezcla de zonas con un bloque relevante de Z3 (zona "gris").';
-    add(hi >= 35 ? 'warn' : 'ok', 'Distribución de zonas', t + ' Zonas calculadas con tu FC umbral de ' + A.profile.lthr + ' ppm' + (A.profile.lthr === Math.round(A.profile.hrMax * 0.9) ? ' (estimada como 90 % de la FC máx; ajústala en Perfil para más precisión).' : '.'));
+    if (hi >= 20) t += 'Pasó ' + f0(hi) + ' % en Z4-Z5 (' + f0((A.zones[3] + A.zones[4]) / 60) + ' min): estímulo de calidad que pide recuperación.'; else if (pct[0] + pct[1] >= 80) t += 'Más del 80 % en Z1-Z2: sesión aeróbica de bajo estrés.'; else t += 'Mezcla de zonas con un bloque relevante de Z3 (zona "gris").';
+    add(hi >= 35 ? 'warn' : 'ok', 'Distribución de zonas', t + ' Zonas calculadas con la FC umbral de ' + A.profile.lthr + ' ppm' + (A.profile.lthrAuto ? ' (estimada como 90 % de la FC máx; introduce la real del deportista para más precisión).' : '.'));
   }
   // Acople
   const D = A.decoupling;
@@ -502,8 +510,8 @@ function activityInsights(act, history) {
       let lvl, t;
       if (p < 3) { lvl = 'ok'; t = 'Desacople de ' + f1(p) + ' % (' + base + '): muy buen acople; la FC se mantuvo estable para la misma salida de trabajo.'; }
       else if (p < 5) { lvl = 'ok'; t = 'Desacople de ' + f1(p) + ' % (' + base + '): dentro del rango aeróbico sólido (<5 %).'; }
-      else if (p < 10) { lvl = 'warn'; t = 'Desacople de ' + f1(p) + ' % (' + base + '): deriva cardíaca moderada. Puede deberse a calor, deshidratación, fatiga acumulada o a que el esfuerzo superó tu base aeróbica.'; }
-      else { lvl = 'bad'; t = 'Desacople de ' + f1(p) + ' % (' + base + '): deriva alta. Indica fatiga marcada, calor/deshidratación o intensidad por encima de tu capacidad aeróbica actual.'; }
+      else if (p < 10) { lvl = 'warn'; t = 'Desacople de ' + f1(p) + ' % (' + base + '): deriva cardíaca moderada. Puede deberse a calor, deshidratación, fatiga acumulada o a que el esfuerzo superó la base aeróbica.'; }
+      else { lvl = 'bad'; t = 'Desacople de ' + f1(p) + ' % (' + base + '): deriva alta. Indica fatiga marcada, calor/deshidratación o intensidad por encima de la capacidad aeróbica actual.'; }
       if (!D.steady) { lvl = 'info'; t += ' Atención: la sesión fue muy variable (intervalos o cambios de ritmo), por lo que este valor es poco fiable; el acople se interpreta bien en esfuerzos continuos de 40+ min.'; }
       if (D.hilly) t += ' El terreno fue con desnivel: la velocidad subestima el esfuerzo en subidas y puede distorsionar el resultado.';
       add(lvl, 'Acople cardíaco', t + ' (FC ' + f0(D.e1.hr) + ' → ' + f0(D.e2.hr) + ' ppm entre mitades.)');
@@ -515,15 +523,15 @@ function activityInsights(act, history) {
     if (prev.length >= 2) {
       const pm = mean(prev.map(h => h.A.ef)), d = (A.ef - pm) / pm * 100;
       add(d < -5 ? 'warn' : (d > 3 ? 'ok' : 'info'), 'Eficiencia aeróbica',
-        'Factor de eficiencia ' + f1(A.ef) + ' (' + (d >= 0 ? '+' : '') + f1(d) + ' % frente a tus últimas ' + prev.length + ' sesiones de ' + sportName.toLowerCase() + '). ' +
-        (d < -5 ? 'Una caída sostenida puede reflejar fatiga acumulada, calor o falta de recuperación; compara con las próximas sesiones.' : d > 3 ? 'Mejor rendimiento por latido que tu media reciente.' : 'Sin cambios relevantes.'));
+        'Factor de eficiencia ' + f1(A.ef) + ' (' + (d >= 0 ? '+' : '') + f1(d) + ' % frente a las últimas ' + prev.length + ' sesiones de ' + sportName.toLowerCase() + '). ' +
+        (d < -5 ? 'Una caída sostenida puede reflejar fatiga acumulada, calor o falta de recuperación; compara con las próximas sesiones.' : d > 3 ? 'Mejor rendimiento por latido que su media reciente.' : 'Sin cambios relevantes.'));
     }
   }
   // Recuperación intra-sesión
   if (A.hrr) {
     const d = A.hrr.drop;
     const lvl = d >= 25 ? 'ok' : d >= 15 ? 'info' : 'warn';
-    add(lvl, 'Recuperación cardíaca', 'Tras un esfuerzo a ' + f0(A.hrr.from) + ' ppm, la FC bajó ' + f0(d) + ' ppm en 60 s. ' + (d >= 25 ? 'Recuperación rápida (buena señal parasimpática).' : d >= 15 ? 'Recuperación normal.' : 'Recuperación lenta: puede asociarse a fatiga, estrés acumulado o a un esfuerzo todavía muy exigente (también influye la postura y si seguiste moviéndote).'));
+    add(lvl, 'Recuperación cardíaca', 'Tras un esfuerzo a ' + f0(A.hrr.from) + ' ppm, la FC bajó ' + f0(d) + ' ppm en 60 s. ' + (d >= 25 ? 'Recuperación rápida (buena señal parasimpática).' : d >= 15 ? 'Recuperación normal.' : 'Recuperación lenta: puede asociarse a fatiga, estrés acumulado o a un esfuerzo todavía muy exigente (también influye la postura y si se siguió moviendo).'));
   } else if (A.hasHr) add('info', 'Recuperación cardíaca', 'No se detectó un esfuerzo seguido de parada o bajada clara de ritmo, así que no se puede medir la caída de FC en 60 s.');
   // Ritmo
   if (A.split && act.sport !== 'swim') {
@@ -542,22 +550,33 @@ function activityInsights(act, history) {
     if (H.artifactPct > 5) t += ' Se descartó un ' + f1(H.artifactPct) + ' % de latidos por artefactos: calidad de señal limitada.';
     add(H.artifactPct > 10 ? 'warn' : 'info', 'Variabilidad cardíaca (R-R)', t);
   } else add('info', 'Variabilidad cardíaca (R-R)', 'Este archivo no incluye intervalos R-R, por eso no se puede calcular la VFC. Suele aparecer en FIT grabados con banda pectoral compatible o en relojes que guardan datos de VFC. En GPX/TCX nunca están.');
+  const pr = A.profile, est = [];
+  if (A.hasHr) {
+    if (pr.hrMaxAuto) est.push('FC máxima (' + pr.hrMax + ' ppm, tomada del máximo observado en sus archivos)');
+    if (pr.hrRestAuto) est.push('FC en reposo (' + pr.hrRest + ' ppm por defecto)');
+    if (pr.lthrAuto) est.push('FC umbral (' + pr.lthr + ' ppm, el 90 % de la FC máxima)');
+  }
+  if (act.sport === 'bike' && A.hasPw && !pr.ftp) est.push('FTP (sin él la carga se calcula por frecuencia cardíaca y no por potencia)');
+  if (est.length) out.unshift({ level: 'warn', title: 'Datos del deportista por completar', text: 'Este análisis usa valores estimados: ' + est.join('; ') + '. Para que zonas, carga e intensidad reflejen la realidad del deportista, introdúcelos en su perfil.' });
   return out;
 }
 function weekInsights(W, profile) {
   const out = [], add = (level, title, text) => out.push({ level, title, text });
   if (!W.n) { add('info', 'Semana sin actividades', 'No hay actividades cargadas en esta semana.'); return out; }
+  const estAct = W.acts.find(a => a.A.profile && ((a.A.hasHr && (a.A.profile.hrMaxAuto || a.A.profile.lthrAuto || a.A.profile.hrRestAuto)) || (a.sport === 'bike' && a.A.hasPw && !a.A.profile.ftp)));
+  if (estAct) add('warn', 'Datos del deportista por completar', 'Parte del análisis usa valores estimados (FC máxima, reposo, umbral o FTP no indicados). Con los datos reales del deportista las zonas y la carga serán más exactas.');
   const hrs = W.dur / 3600;
   let t = (W.partial ? 'Semana en curso (' + W.elapsed + ' de 7 días). ' : '') + W.n + ' sesiones, ' + f1(hrs) + ' h, ' + f1(W.dist / 1000) + ' km y carga total ' + f0(W.load) + '.';
   if (isNum(W.loadChange) && W.prevLoad > 0) t += ' Frente a ' + (W.partial ? 'los mismos días de la semana anterior' : 'la semana anterior') + ': ' + (W.loadChange >= 0 ? '+' : '') + f0(W.loadChange) + ' % de carga.';
   const jump = isNum(W.loadChange) && W.loadChange > 30 && W.prevLoad > 50;
   add(jump ? 'warn' : 'info', 'Resumen de la semana', t + (jump ? ' Un salto de más del 30 % en una semana aumenta el riesgo de sobrecarga; una subida prudente ronda el 5-10 %.' : ''));
+  if (W.pmc && !isNum(W.acwr)) add('info', 'Carga aguda vs. crónica', 'Histórico insuficiente (' + W.historyDays + ' días): se necesitan al menos 14 días, e idealmente 4 semanas, para estimar el ACWR. Sube sesiones de semanas anteriores.');
   if (isNum(W.acwr)) {
     let lvl, txt;
-    if (!W.acwrReliable) { lvl = 'info'; txt = 'ACWR provisional ' + f2(W.acwr) + ', pero solo tienes ' + W.historyDays + ' días de histórico; hacen falta unas 4 semanas de datos para que sea fiable.'; }
-    else if (W.acwr > 1.5) { lvl = 'bad'; txt = 'ACWR ' + f2(W.acwr) + ': carga aguda muy por encima de tu base de las últimas semanas (zona de mayor riesgo de lesión/sobrecarga).'; }
+    if (!W.acwrReliable) { lvl = 'info'; txt = 'ACWR provisional ' + f2(W.acwr) + ', pero solo hay ' + W.historyDays + ' días de histórico; hacen falta unas 4 semanas de datos para que sea fiable.'; }
+    else if (W.acwr > 1.5) { lvl = 'bad'; txt = 'ACWR ' + f2(W.acwr) + ': carga aguda muy por encima de su base de las últimas semanas (zona de mayor riesgo de lesión/sobrecarga).'; }
     else if (W.acwr > 1.3) { lvl = 'warn'; txt = 'ACWR ' + f2(W.acwr) + ': por encima del rango óptimo (0,8-1,3). Vigila la fatiga.'; }
-    else if (W.acwr < 0.8) { lvl = 'info'; txt = 'ACWR ' + f2(W.acwr) + ': carga menor que tu base reciente (semana de descarga o pérdida de forma si se prolonga).'; }
+    else if (W.acwr < 0.8) { lvl = 'info'; txt = 'ACWR ' + f2(W.acwr) + ': carga menor que su base reciente (semana de descarga o pérdida de forma si se prolonga).'; }
     else { lvl = 'ok'; txt = 'ACWR ' + f2(W.acwr) + ': dentro del rango óptimo (0,8-1,3).'; }
     add(lvl, 'Carga aguda vs. crónica', txt);
   }
@@ -576,7 +595,7 @@ function weekInsights(W, profile) {
     let tx = 'Tiempo en Z1-Z2: ' + f0(l) + ' %, Z3: ' + f0(m) + ' %, Z4-Z5: ' + f0(h) + ' %. ';
     let lvl = 'ok';
     if (l >= 75 && h >= 10) tx += 'Distribución polarizada (muchas horas fáciles + algo de calidad): modelo muy recomendado.';
-    else if (l >= 75) tx += 'Mayoría de trabajo fácil; si buscas mejorar rendimiento puedes añadir algo de calidad (Z4-Z5).';
+    else if (l >= 75) tx += 'Mayoría de trabajo fácil; para mejorar el rendimiento se puede añadir algo de calidad (Z4-Z5).';
     else if (m >= 30) { lvl = 'warn'; tx += 'Mucho tiempo en Z3 ("zona gris"): ni suficientemente fácil para recuperar ni duro para mejorar.'; }
     else if (h >= 25) { lvl = 'warn'; tx += 'Mucho trabajo intenso para la semana: asegúrate de intercalar días fáciles.'; }
     else tx += 'Distribución mixta.';
@@ -585,7 +604,7 @@ function weekInsights(W, profile) {
   if (isFinite(W.monotony) && W.n >= 3 && W.elapsed >= 4) {
     const lvl = W.monotony > 2 ? 'warn' : 'ok';
     add(lvl, 'Monotonía y descanso', 'Monotonía ' + f2(W.monotony) + ' (más de 2 indica poca variación entre días fáciles y duros), ' + W.restDays + ' día(s) sin entrenar y ' + W.hardDays + ' día(s) exigente(s)' + (W.partial ? ' en los ' + W.elapsed + ' días transcurridos' : '') + '. ' + (W.restDays === 0 ? 'No hubo ningún día completo de descanso: conviene programar al menos uno.' : (W.monotony > 2 ? 'Alterna mejor días duros con días muy suaves.' : 'Buena alternancia.')));
-  } else if (W.restDays === 0 && W.elapsed >= 6 && W.n >= 5) add('warn', 'Descanso', 'Entrenaste ' + W.elapsed + ' días seguidos: programa al menos un día de descanso o muy suave.');
+  } else if (W.restDays === 0 && W.elapsed >= 6 && W.n >= 5) add('warn', 'Descanso', 'Entrenó ' + W.elapsed + ' días seguidos: programa al menos un día de descanso o muy suave.');
   for (const [sp, d] of Object.entries(W.bySport)) {
     const bits = [];
     if (isNum(d.ef) && isNum(d.efPrev)) { const c = (d.ef - d.efPrev) / d.efPrev * 100; bits.push('Eficiencia ' + (c >= 0 ? '+' : '') + f1(c) + ' % frente a las 3 semanas previas' + (c < -5 ? ' (posible fatiga acumulada o calor)' : c > 3 ? ' (buena evolución)' : '')); }
@@ -598,11 +617,11 @@ function weekInsights(W, profile) {
   if (isNum(W.acwr) && W.acwrReliable && W.acwr > 1.3) rec.push('reduce el volumen o la intensidad la próxima semana');
   if (W.zoneTotal > 0 && W.mid > 0.3) rec.push('polariza: haz más fácil lo fácil y más duro lo duro');
   if (!rec.length) rec.push('mantén la progresión actual y revisa cómo evolucionan la eficiencia y el acople en las próximas sesiones');
-  add('info', 'Sugerencia', 'Para la próxima semana: ' + rec.join('; ') + '. Son indicadores orientativos basados en tus datos, no un diagnóstico médico.');
+  add('info', 'Sugerencia', 'Para la próxima semana: ' + rec.join('; ') + '. Son indicadores orientativos basados en los datos, no un diagnóstico médico.');
   return out;
 }
 
-const Core = { SPORTS, ZN, ZLIM, FIT_EPOCH, normProfile, parseFit, parseXml, resample, analyze, analyzeHrv, dfaAlpha1, cleanRR, hrvTime, downsample,
+const Core = { observedMaxHr, SPORTS, ZN, ZLIM, FIT_EPOCH, normProfile, parseFit, parseXml, resample, analyze, analyzeHrv, dfaAlpha1, cleanRR, hrvTime, downsample,
   pmc, weekSummary, f0, f1, f2, activityInsights, weekInsights, dailyLoads, dayKey, keyToDate, weekStartKey, addDays, daysBetween, isNum, mean, sd, median, movAvg, normalizedPower, guessSport };
 if (typeof module !== 'undefined' && module.exports) module.exports = Core; else root.Core = Core;
 })(typeof window !== 'undefined' ? window : globalThis);

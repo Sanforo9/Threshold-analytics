@@ -1,7 +1,7 @@
 (() => {
 'use strict';
 const C = Core, $ = id => document.getElementById(id), isNum = C.isNum;
-const state = { acts: [], profile: C.normProfile(loadProfile()), tab: 'actividad', sel: null, wk: null, db: null, persist: true };
+const state = { acts: [], athletes: [], cur: null, tab: 'actividad', sel: null, wk: null, db: null, persist: true, pending: null };
 const SPORT_ICON = { run: '🏃', bike: '🚴', swim: '🏊', other: '🏋️' };
 const ZCOL = ['var(--z1)', 'var(--z2)', 'var(--z3)', 'var(--z4)', 'var(--z5)'];
 
@@ -12,19 +12,18 @@ const f1 = v => isNum(v) ? C.f1(v) : '—';
 const f2 = v => isNum(v) ? C.f2(v) : '—';
 const tick = () => new Promise(r => setTimeout(r, 0));
 function fmtDur(s) { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60; return h ? `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}` : `${m}:${String(ss).padStart(2, '0')}`; }
-function fmtClock(sec) { return fmtDur(sec); }
 function fmtPaceMin(min) { if (!isNum(min)) return '—'; const m = Math.floor(min), s = Math.round((min - m) * 60); return s === 60 ? `${m + 1}:00` : `${m}:${String(s).padStart(2, '0')}`; }
-function paceOf(sp, sport) { // devuelve texto de ritmo/velocidad
+function paceOf(sp, sport) {
   if (!isNum(sp) || sp <= 0) return '—';
   if (sport === 'run') return fmtPaceMin(1000 / sp / 60) + ' /km';
   if (sport === 'swim') return fmtPaceMin(100 / sp / 60) + ' /100m';
   return f1(sp * 3.6) + ' km/h';
 }
 function dateStr(ms) { return new Date(ms).toLocaleString('es', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
-function rangeStr(wk) { const a = C.keyToDate(wk), b = C.keyToDate(C.addDays(wk, 6)); const o = { day: 'numeric', month: 'short' }; return a.toLocaleDateString('es', o) + ' – ' + b.toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' }); }
+function rangeStr(wk) { const a = C.keyToDate(wk), b = C.keyToDate(C.addDays(wk, 6)); return a.toLocaleDateString('es', { day: 'numeric', month: 'short' }) + ' – ' + b.toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' }); }
 function toast(msg, ms = 4500) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = 'none', ms); }
-function loadProfile() { try { return JSON.parse(localStorage.getItem('tl2.profile') || '{}'); } catch (e) { return {}; } }
-function saveProfile(p) { try { localStorage.setItem('tl2.profile', JSON.stringify(p)); } catch (e) { } }
+const LS = { get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { } } };
+const saveAthletes = () => { LS.set('tl3.athletes', state.athletes); LS.set('tl3.cur', state.cur); };
 
 /* ---------- almacenamiento (IndexedDB) ---------- */
 const DB = {
@@ -32,74 +31,171 @@ const DB = {
   run(mode, fn) { return new Promise((res, rej) => { const t = state.db.transaction('acts', mode), rq = fn(t.objectStore('acts')); t.oncomplete = () => res(rq ? rq.result : undefined); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error); }); },
   all() { return this.run('readonly', s => s.getAll()); },
   put(rec) { return this.run('readwrite', s => s.put(rec)); },
-  del(id) { return this.run('readwrite', s => s.delete(id)); },
+  delMany(ids) { return this.run('readwrite', s => { ids.forEach(i => s.delete(i)); }); },
   clear() { return this.run('readwrite', s => s.clear()); }
 };
-async function persist(act) { if (!state.persist) return; try { await DB.put({ id: act.id, name: act.name, sport: act.sport, start: act.start, rs: act.rs, rr: act.rr }); } catch (e) { state.persist = false; toast('No se pudo guardar en este navegador; los datos solo durarán esta sesión.'); } }
+async function persist(a) { if (!state.persist) return; try { await DB.put({ id: a.id, name: a.name, sport: a.sport, start: a.start, rs: a.rs, rr: a.rr, ath: a.ath, obs: a.obs }); } catch (e) { state.persist = false; toast('No se pudo guardar en este navegador; los datos solo durarán esta sesión.'); } }
+async function removeActs(ids) { state.acts = state.acts.filter(a => !ids.includes(a.id)); if (state.persist && ids.length) { try { await DB.delMany(ids); } catch (e) { } } }
 
 /* ---------- modelo ---------- */
-function build(rec) {
-  const A = C.analyze(rec.rs, rec.sport, rec.rr, state.profile);
-  return { id: rec.id, name: rec.name, sport: rec.sport, start: rec.start, day: C.dayKey(rec.start), rs: rec.rs, rr: rec.rr, A };
-}
-function sortActs() { state.acts.sort((a, b) => a.start - b.start); }
-function recompute() { state.acts = state.acts.map(a => build(a)); sortActs(); }
+const curAth = () => state.athletes.find(a => a.id === state.cur) || null;
+const mine = () => state.acts.filter(a => a.ath === state.cur).sort((a, b) => a.start - b.start);
+function observedOf(athId) { return Math.max(0, ...state.acts.filter(a => a.ath === athId).map(a => a.obs || 0)); }
+function profileOf(athId) { const at = state.athletes.find(a => a.id === athId); return C.normProfile(at ? at.profile : {}, observedOf(athId)); }
+function analyzeAthlete(athId) { const P = profileOf(athId); for (const a of state.acts) if (a.ath === athId) a.A = C.analyze(a.rs, a.sport, a.rr, P); }
 function detectSport(rs) { const sp = Array.from(rs.s.sp).filter(v => isNum(v) && v > 0.5); const m = C.mean(sp); if (!isNum(m)) return 'other'; return m > 5.5 ? 'bike' : m > 1.8 ? 'run' : 'other'; }
+function selectLatest() { const l = mine(); if (l.length) { state.sel = l[l.length - 1].id; state.wk = C.weekStartKey(l[l.length - 1].start); } else { state.sel = null; state.wk = null; } }
+function hasEstimates(list) { return list.some(a => a.A && a.A.profile && ((a.A.hasHr && (a.A.profile.hrMaxAuto || a.A.profile.lthrAuto || a.A.profile.hrRestAuto)) || (a.sport === 'bike' && a.A.hasPw && !a.A.profile.ftp))); }
 
-async function importFiles(fileList) {
+/* ---------- lectura de archivos y cuadro de datos ---------- */
+async function openFiles(fileList) {
   const files = [...fileList]; if (!files.length) return;
-  const added = [], dups = [], errs = [];
+  const items = [], errs = [];
   for (let i = 0; i < files.length; i++) {
-    const f = files[i]; toast(`Analizando ${i + 1}/${files.length}: ${f.name}`, 60000); await tick();
+    const f = files[i]; toast(`Leyendo ${i + 1}/${files.length}: ${f.name}`, 60000); await tick();
     try {
       let p;
       if (/\.fit$/i.test(f.name)) p = C.parseFit(await f.arrayBuffer());
       else if (/\.(gpx|tcx)$/i.test(f.name)) p = C.parseXml(await f.text(), f.name);
       else throw new Error('Formato no compatible (usa .fit, .gpx o .tcx)');
-      const rs = C.resample(p.points), sport = p.sport || detectSport(rs);
-      const id = sport + '_' + Math.round(rs.start / 1000) + '_' + rs.n;
-      if (state.acts.some(a => a.id === id)) { dups.push(f.name); continue; }
-      const act = build({ id, name: f.name, sport, start: rs.start, rs, rr: p.rr || [] });
-      state.acts.push(act); added.push(act); await persist(act);
+      const rs = C.resample(p.points), s = rs.s;
+      const cov = a => { let c = 0; for (let k = 0; k < a.length; k++) if (isNum(a[k])) c++; return c / a.length; };
+      items.push({ name: f.name, sport: p.sport || detectSport(rs), auto: !!p.sport, rs, rr: p.rr || [], obs: C.observedMaxHr(rs), hasHr: cov(s.hr) > 0.5, hasPw: cov(s.pw) > 0.5 && C.mean(s.pw) > 5, hasRr: (p.rr || []).length > 120 });
     } catch (e) { errs.push(`${f.name}: ${e.message}`); }
   }
-  sortActs();
-  let msg = `${added.length} actividad(es) importada(s).`;
-  if (dups.length) msg += `\n${dups.length} ya estaba(n) cargada(s).`;
-  if (errs.length) msg += '\nNo se pudieron leer:\n' + errs.join('\n');
-  toast(msg, errs.length ? 9000 : 4000);
-  if (added.length) {
-    const last = added.slice().sort((a, b) => b.start - a.start)[0];
-    state.sel = last.id; state.wk = C.weekStartKey(last.start);
-    state.tab = added.length === 1 ? 'actividad' : 'semana';
+  $('toast').style.display = 'none';
+  if (!items.length) { toast('No se pudo leer ningún archivo.\n' + errs.join('\n'), 9000); return; }
+  state.pending = { items, errs };
+  showImportModal();
+}
+const num = id => { const v = parseFloat(($(id) || {}).value); return isFinite(v) ? v : 0; };
+function fieldHtml(id, label, val, ph, min, max, hint, needed) {
+  return `<div><label>${label} ${needed ? '<span class="need" id="n_' + id + '"></span>' : ''}</label><input type="number" id="${id}" value="${val || ''}" placeholder="${ph}" min="${min}" max="${max}"><div class="hint">${hint}</div></div>`;
+}
+function athleteFields(prof, ctx) { // ctx: {hr:boolean, ftp:boolean, obs:number}
+  const p = prof || {};
+  return `<div class="form">
+    ${ctx.hr ? fieldHtml('m_hrMax', 'FC máxima (ppm)', p.hrMax, 'se estimará', 120, 230, 'La más alta en un esfuerzo máximo o test.' + (ctx.obs ? ' Si se deja vacía se usará el máximo observado en los archivos (' + Math.round(ctx.obs) + ').' : ' Vacía: se usará 190.'), true) : ''}
+    ${ctx.hr ? fieldHtml('m_hrRest', 'FC en reposo (ppm)', p.hrRest, 'se estimará', 30, 100, 'Al despertar, tumbado y tranquilo. Vacía: se usará 60.', true) : ''}
+    ${ctx.hr ? fieldHtml('m_lthr', 'FC umbral / LTHR (ppm)', p.lthr, 'se estimará', 100, 220, 'Media de los últimos 20 min de un test de 30 min a tope. Vacía: 90 % de la FC máx.', true) : ''}
+    ${ctx.ftp ? fieldHtml('m_ftp', 'FTP ciclismo (W)', p.ftp, 'sin FTP', 50, 600, 'Aprox. 95 % de la potencia media de un test de 20 min. Vacía: la carga se calcula por FC.', true) : ''}
+    <div><label>Sexo (cálculo TRIMP)</label><select id="m_sex"><option value="m" ${p.sex !== 'f' ? 'selected' : ''}>Hombre</option><option value="f" ${p.sex === 'f' ? 'selected' : ''}>Mujer</option></select><div class="hint">Solo ajusta el peso de la carga por FC.</div></div></div>`;
+}
+function showImportModal() {
+  const P = state.pending, items = P.items;
+  const needHr = items.some(i => i.hasHr), needFtp = items.some(i => i.sport === 'bike' && i.hasPw);
+  const sel = state.cur || (state.athletes[0] && state.athletes[0].id) || '__new';
+  const opts = state.athletes.map(a => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.name)}</option>`).join('') + `<option value="__new" ${sel === '__new' ? 'selected' : ''}>＋ Nuevo deportista…</option>`;
+  const sports = k => Object.entries(C.SPORTS).map(([v, l]) => `<option value="${v}" ${v === k ? 'selected' : ''}>${l}</option>`).join('');
+  const rows = items.map((i, n) => `<tr><td>${esc(i.name)}</td><td><select class="m_sport" data-i="${n}" style="width:auto;padding:4px 6px">${sports(i.sport)}</select></td><td>${fmtDur(i.rs.n)}</td><td><div class="fl">${i.hasHr ? '<span class="chip">FC</span>' : ''}${i.hasPw ? '<span class="chip">Potencia</span>' : ''}${i.hasRr ? '<span class="chip">R-R</span>' : ''}${isNum(i.rs.s.sp[Math.floor(i.rs.n / 2)]) ? '<span class="chip">Velocidad</span>' : ''}</div></td></tr>`).join('');
+  $('modal').innerHTML = `<div class="mbg"><div class="modal">
+    <h3>Sesiones a analizar (${items.length})</h3>
+    <div class="muted">Indica de quién son y completa sus datos para que el análisis se ajuste a la realidad del deportista.</div>
+    <div class="sec"><div class="tw"><table><tr><th>Archivo</th><th>Deporte</th><th>Duración</th><th>Datos</th></tr>${rows}</table></div>
+    ${P.errs.length ? `<div class="ins bad"><b>No se pudieron leer</b>${P.errs.map(esc).join('<br>')}</div>` : ''}</div>
+    <div class="sec"><b>Deportista</b><div class="form"><div><label>¿De quién son estas sesiones?</label><select id="m_ath">${opts}</select></div>
+    <div id="m_newwrap" style="display:none"><label>Nombre del nuevo deportista</label><input id="m_name" placeholder="Ej. Laura Gómez"></div></div></div>
+    <div class="sec"><b>Datos fisiológicos</b><div id="m_fields"></div>
+    <div class="hint">Los campos vacíos se estimarán y el análisis lo indicará. Con los datos reales las zonas, la carga y las conclusiones serán más exactas.</div></div>
+    <div class="row sb" style="margin-top:18px"><button class="btn" id="m_cancel">Cancelar</button><button class="btn primary" id="m_ok">Analizar sesiones</button></div></div></div>`;
+  const obsPend = Math.max(...items.map(i => i.obs || 0));
+  const fill = () => {
+    const id = $('m_ath').value, at = state.athletes.find(a => a.id === id);
+    $('m_newwrap').style.display = id === '__new' ? 'block' : 'none';
+    const obs = Math.max(obsPend, id === '__new' ? 0 : observedOf(id));
+    $('m_fields').innerHTML = athleteFields(at ? at.profile : {}, { hr: needHr, ftp: needFtp, obs });
+    const upd = () => ['m_hrMax', 'm_hrRest', 'm_lthr', 'm_ftp'].forEach(f => { const el = $(f), n = $('n_' + f); if (el && n) n.textContent = el.value ? '' : '· falta, se estimará'; });
+    ['m_hrMax', 'm_hrRest', 'm_lthr', 'm_ftp'].forEach(f => { const el = $(f); if (el) el.oninput = upd; }); upd();
+  };
+  $('m_ath').onchange = fill; fill();
+  $('m_cancel').onclick = () => { state.pending = null; $('modal').innerHTML = ''; };
+  $('m_ok').onclick = confirmImport;
+}
+async function confirmImport() {
+  const P = state.pending; if (!P) return;
+  let athId = $('m_ath').value, ath;
+  const prof = { hrMax: num('m_hrMax'), hrRest: num('m_hrRest'), lthr: num('m_lthr'), ftp: num('m_ftp'), sex: $('m_sex').value };
+  if (athId === '__new') { const name = $('m_name').value.trim(); if (!name) { toast('Escribe el nombre del nuevo deportista.'); return; } ath = { id: 'a' + Date.now(), name, profile: {} }; }
+  else ath = state.athletes.find(a => a.id === athId);
+  const err = checkProfile(prof); if (err) { toast(err); return; }
+  const old = ath.profile || {};
+  ath.profile = Object.assign({}, old, { sex: prof.sex });
+  for (const k of ['hrMax', 'hrRest', 'lthr', 'ftp']) if ($('m_' + k)) ath.profile[k] = prof[k];
+  if (athId === '__new') state.athletes.push(ath);
+  state.cur = ath.id; saveAthletes();
+  const items = P.items; document.querySelectorAll('.m_sport').forEach(s => { items[+s.dataset.i].sport = s.value; });
+  $('modal').innerHTML = ''; state.pending = null;
+  let added = 0, dups = 0; const fresh = [];
+  for (const it of items) {
+    const id = ath.id + '_' + it.sport + '_' + Math.round(it.rs.start / 1000) + '_' + it.rs.n;
+    if (state.acts.some(a => a.id === id)) { dups++; continue; }
+    const a = { id, name: it.name, sport: it.sport, start: it.rs.start, day: C.dayKey(it.rs.start), rs: it.rs, rr: it.rr, ath: ath.id, obs: it.obs, A: null };
+    state.acts.push(a); fresh.push(a); added++;
   }
+  toast('Analizando…', 60000); await tick();
+  analyzeAthlete(ath.id);
+  for (const a of fresh) await persist(a);
+  let msg = `${added} sesión(es) analizada(s) para ${ath.name}.`; if (dups) msg += `\n${dups} ya estaba(n) cargada(s).`;
+  toast(msg, 4000);
+  if (fresh.length) {
+    const last = fresh.slice().sort((a, b) => b.start - a.start)[0];
+    state.sel = last.id; state.wk = C.weekStartKey(last.start); state.tab = fresh.length === 1 ? 'actividad' : 'semana';
+  } else selectLatest();
   render();
+}
+function checkProfile(p) {
+  if (p.hrMax && p.hrRest && p.hrMax < p.hrRest + 20) return 'La FC máxima debe ser bastante mayor que la de reposo.';
+  if (p.hrMax && p.lthr && p.lthr > p.hrMax) return 'La FC umbral no puede superar la FC máxima.';
+  if (p.lthr && p.hrRest && p.lthr < p.hrRest + 20) return 'La FC umbral parece demasiado baja respecto a la de reposo.';
+  return '';
+}
+
+/* ---------- limpiar ---------- */
+function openClear() {
+  const at = curAth(), n = mine().length, total = state.acts.length;
+  if (!state.acts.length && !state.athletes.length) { toast('No hay nada que limpiar.'); return; }
+  $('modal').innerHTML = `<div class="mbg"><div class="modal" style="max-width:520px"><h3>Limpiar y empezar de nuevo</h3><div class="muted">Elige qué quieres quitar. Esta acción no se puede deshacer.</div>
+    ${at ? `<button class="btn big" id="c_ses"><b>Limpiar las sesiones de ${esc(at.name)}</b><small>${n} sesión(es). Se conservan sus datos fisiológicos para subir nuevas sesiones.</small></button>
+    <button class="btn big" id="c_ath"><b>Eliminar a ${esc(at.name)}</b><small>Borra al deportista, sus datos y sus sesiones.</small></button>` : ''}
+    <button class="btn big danger" id="c_all"><b>Borrar todo</b><small>${total} sesión(es) y ${state.athletes.length} deportista(s). La app queda como nueva.</small></button>
+    <div class="row" style="margin-top:10px"><button class="btn" id="c_no">Cancelar</button></div></div></div>`;
+  const close = () => { $('modal').innerHTML = ''; };
+  $('c_no').onclick = close;
+  if (at) {
+    $('c_ses').onclick = async () => { await removeActs(state.acts.filter(a => a.ath === at.id).map(a => a.id)); close(); state.sel = null; state.wk = null; state.tab = 'actividad'; toast('Sesiones de ' + at.name + ' eliminadas. Ya puedes subir nuevas.'); render(); };
+    $('c_ath').onclick = async () => { await removeActs(state.acts.filter(a => a.ath === at.id).map(a => a.id)); state.athletes = state.athletes.filter(a => a.id !== at.id); state.cur = state.athletes[0] ? state.athletes[0].id : null; saveAthletes(); close(); selectLatest(); state.tab = 'actividad'; toast(at.name + ' eliminado.'); render(); };
+  }
+  $('c_all').onclick = async () => { try { if (state.persist) await DB.clear(); } catch (e) { } state.acts = []; state.athletes = []; state.cur = null; state.sel = null; state.wk = null; saveAthletes(); close(); state.tab = 'actividad'; toast('Todo borrado.'); render(); };
 }
 
 /* ---------- vistas ---------- */
 function setTab(t) { state.tab = t; render(); window.scrollTo(0, 0); }
-function dropzone(extra) {
-  return `<div class="drop" id="drop"><b>Arrastra aquí tus archivos o pulsa para elegirlos</b><p>Formatos .fit, .gpx y .tcx. Puedes subir una actividad o todas las de la semana a la vez.${extra || ''}</p></div>`;
-}
+function dropzone(extra) { return `<div class="drop" id="drop"><b>Arrastra aquí tus archivos o pulsa para elegirlos</b><p>Formatos .fit, .gpx y .tcx. Puedes subir una sesión o las de varios días y semanas a la vez. Después te pediremos de quién son y sus datos (umbral, FTP…).${extra || ''}</p></div>`; }
 function insHtml(list) {
   const tag = { ok: 'Bien', warn: 'Atención', bad: 'Alerta', info: 'Dato' };
   return list.map(i => `<div class="ins ${i.level}"><span class="tag">${tag[i.level]}</span><b>${esc(i.title)}</b>${esc(i.text)}</div>`).join('');
 }
 const GLOSSARY = `<details><summary>¿Qué significa cada métrica?</summary>
-<p><b>Carga:</b> estrés total de la sesión. 100 equivale a 1 hora a tu umbral. Se calcula con potencia (ciclismo con FTP) o con frecuencia cardíaca (TRIMP de Banister).</p>
-<p><b>Intensidad relativa:</b> qué tan cerca de tu umbral trabajaste (1,0 = umbral).</p>
+<p><b>Carga:</b> estrés total de la sesión. 100 equivale a 1 hora al umbral. Se calcula con potencia (ciclismo con FTP) o con frecuencia cardíaca (TRIMP de Banister).</p>
+<p><b>Intensidad relativa:</b> qué tan cerca del umbral se trabajó (1,00 = umbral).</p>
 <p><b>Acople/desacople cardíaco:</b> cuánto sube la FC entre la primera y la segunda mitad con la misma potencia o velocidad. Menos de 5 % indica buena base aeróbica; más de 10 % indica fatiga, calor o exceso de intensidad.</p>
 <p><b>Factor de eficiencia:</b> potencia (o velocidad) por latido. Si baja con el tiempo en esfuerzos comparables puede indicar fatiga.</p>
-<p><b>Recuperación cardíaca:</b> cuántos latidos baja la FC en 60 s tras un esfuerzo exigente al detenerte o rodar suave.</p>
+<p><b>Recuperación cardíaca:</b> cuántos latidos baja la FC en 60 s tras un esfuerzo exigente al detenerse o rodar suave.</p>
 <p><b>Variabilidad cardíaca (R-R):</b> RMSSD y SDNN miden la variación entre latidos; DFA α1 por debajo de 0,75 se asocia con haber pasado el umbral aeróbico. Solo disponible si el archivo trae intervalos R-R.</p>
 <p><b>CTL / ATL / TSB:</b> forma crónica (42 d), fatiga aguda (7 d) y balance entre ambas. Necesitan semanas de histórico para ser fiables.</p>
 <p><b>ACWR:</b> carga de la semana frente a la media de las últimas 4 semanas. Entre 0,8 y 1,3 es la zona óptima.</p>
-<p class="muted">Todo son estimaciones orientativas a partir de tus archivos; no sustituyen la valoración de un entrenador o médico.</p></details>`;
+<p class="muted">Todo son estimaciones orientativas a partir de los archivos; no sustituyen la valoración de un entrenador o médico.</p></details>`;
+const completeBtn = list => hasEstimates(list) ? `<div class="row" style="margin-top:8px"><button class="btn sm primary" data-go="perfil">Completar datos del deportista</button></div>` : '';
+function noAthlete() {
+  return `<div class="card"><h3>Empieza subiendo sesiones</h3><p class="muted">Sube los archivos de uno o varios deportistas. La app te pedirá sus datos (FC máxima, reposo, umbral y FTP) para ajustar el análisis a cada uno. Puedes cambiar de deportista con el selector de arriba y usar <b>Limpiar</b> para empezar de nuevo.</p></div>` + dropzone();
+}
 
 function viewActividad() {
-  if (!state.acts.length) return dropzone() + `<div class="card"><h3>Cómo funciona</h3><p class="muted">Sube un archivo de entrenamiento y obtendrás conclusiones sobre intensidad, fatiga, recuperación, acople cardíaco y variabilidad cardíaca. Si subes varios días, la pestaña <b>Semana</b> resume la carga, la forma y la fatiga de la semana. Antes, ajusta tu <a href="#" data-go="perfil">Perfil</a> (FC máxima, reposo, umbral y FTP) para que las zonas sean exactas.</p></div>`;
-  const act = state.acts.find(a => a.id === state.sel) || state.acts[state.acts.length - 1]; state.sel = act.id;
-  const A = act.A, opts = state.acts.slice().reverse().map(a => `<option value="${a.id}" ${a.id === act.id ? 'selected' : ''}>${SPORT_ICON[a.sport]} ${esc(new Date(a.start).toLocaleDateString('es', { day: 'numeric', month: 'short' }))} · ${fmtDur(a.A.dur)} · ${esc(a.name)}</option>`).join('');
+  const at = curAth(), list = mine();
+  if (!at) return noAthlete();
+  if (!list.length) return `<div class="card"><h3>${esc(at.name)}</h3><p class="muted">Este deportista no tiene sesiones. Sube sus archivos para analizarlos.</p></div>` + dropzone();
+  const act = list.find(a => a.id === state.sel) || list[list.length - 1]; state.sel = act.id;
+  const A = act.A, opts = list.slice().reverse().map(a => `<option value="${a.id}" ${a.id === act.id ? 'selected' : ''}>${SPORT_ICON[a.sport]} ${esc(new Date(a.start).toLocaleDateString('es', { day: 'numeric', month: 'short' }))} · ${fmtDur(a.A.dur)} · ${esc(a.name)}</option>`).join('');
   const sports = Object.entries(C.SPORTS).map(([k, v]) => `<option value="${k}" ${k === act.sport ? 'selected' : ''}>${v}</option>`).join('');
   const kp = (l, v, s) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s || '&nbsp;'}</div></div>`;
   const kpis = [
@@ -108,7 +204,7 @@ function viewActividad() {
     A.hasHr ? kp('FC media / máx', f0(A.avgHr) + ' / ' + f0(A.maxHr), 'ppm') : '',
     A.hasPw ? kp('Potencia', f0(A.avgPw) + ' W', 'NP ' + f0(A.np) + ' W') : '',
     isNum(A.load) ? kp('Carga', f0(A.load), A.loadMethod.split(' ')[0]) : '',
-    isNum(A.IF) ? kp('Intensidad rel.', f2(A.IF), '1,0 = umbral') : '',
+    isNum(A.IF) ? kp('Intensidad rel.', f2(A.IF), '1,00 = umbral') : '',
     isNum(A.ef) ? kp('Eficiencia', f1(A.ef), A.outType === 'pw' ? 'W por latido' : 'm/min por latido') : '',
     isNum(A.ascent) ? kp('Desnivel +', f0(A.ascent) + ' m', '') : ''
   ].join('');
@@ -116,41 +212,42 @@ function viewActividad() {
     const tot = A.zones.reduce((x, y) => x + y, 0) || 1;
     return `<div class="zbar">${A.zones.map((v, i) => `<div style="width:${v / tot * 100}%;background:${ZCOL[i]}"></div>`).join('')}</div>` +
       A.zones.map((v, i) => `<div class="zrow"><span>${C.ZN[i]}</span><div><div class="b" style="width:${v / tot * 100}%;background:${ZCOL[i]};min-width:2px"></div></div><span>${fmtDur(v)} · ${f0(v / tot * 100)} %</span></div>`).join('') +
-      `<div class="hint">Según FC umbral ${A.profile.lthr} ppm (Z1 &lt;81 %, Z2 81-90 %, Z3 90-94 %, Z4 94-100 %, Z5 ≥100 %).</div>`;
+      `<div class="hint">Según FC umbral ${A.profile.lthr} ppm${A.profile.lthrAuto ? ' (estimada)' : ''}: Z1 &lt;81 %, Z2 81-90 %, Z3 90-94 %, Z4 94-100 %, Z5 ≥100 %.</div>`;
   })() : '<div class="empty">Sin frecuencia cardíaca en este archivo.</div>';
   const D = A.decoupling;
   const dec = D && D.valid ? `<table><tr><th></th><th>1ª mitad</th><th>2ª mitad</th><th>Cambio</th></tr>
     <tr><td>FC media</td><td>${f0(D.e1.hr)} ppm</td><td>${f0(D.e2.hr)} ppm</td><td>${D.e2.hr - D.e1.hr >= 0 ? '+' : ''}${f1(D.e2.hr - D.e1.hr)}</td></tr>
     <tr><td>${A.outType === 'pw' ? 'Potencia (NP)' : 'Velocidad'}</td><td>${A.outType === 'pw' ? f0(D.e1.o) + ' W' : paceOf(D.e1.o, act.sport)}</td><td>${A.outType === 'pw' ? f0(D.e2.o) + ' W' : paceOf(D.e2.o, act.sport)}</td><td>${f1((D.e2.o - D.e1.o) / D.e1.o * 100)} %</td></tr>
-    <tr><td><b>Desacople</b></td><td colspan="3"><b>${f1(D.pct)} %</b> ${D.steady ? '' : '<span class="pill">sesión variable: poco fiable</span>'}</td></tr></table>
+    <tr><td><b>Desacople</b></td><td colspan="3"><b>${f1(D.pct)} %</b> ${D.steady ? '' : '<span class="chip">sesión variable: poco fiable</span>'}</td></tr></table>
     <div class="hint">Se omiten los primeros minutos de calentamiento (${f0(D.segMin)} min analizados).</div>` : `<div class="empty">${D && D.reason ? esc(D.reason) : 'No hay datos suficientes (FC y potencia/velocidad).'}</div>`;
   const H = A.hrv;
   const hrvCard = H ? `<div class="card"><h2>Variabilidad cardíaca durante la sesión</h2><div class="kpis" style="margin-bottom:10px">
     ${kp('RMSSD', f0(H.whole.rmssd) + ' ms', 'tercio 1: ' + (H.first ? f0(H.first.rmssd) : '—') + ' → 3: ' + (H.last ? f0(H.last.rmssd) : '—'))}
     ${kp('SDNN', f0(H.whole.sdnn) + ' ms', '')}${kp('pNN50', f1(H.whole.pnn50) + ' %', '')}
-    ${kp('DFA α1 mediano', isNum(H.alphaMedian) ? f1(H.alphaMedian) : '—', isNum(H.pctBelow075) ? f0(H.pctBelow075) + ' % del tiempo &lt; 0,75' : '')}</div>
-    <canvas id="cHrv" style="height:200px"></canvas><div class="hint">DFA α1 en ventanas de 2 min (versión simplificada). Por debajo de 0,75 ≈ por encima del umbral aeróbico; por debajo de 0,5, esfuerzo muy alto. ${H.artifactPct > 0.5 ? 'Latidos descartados por artefactos: ' + f1(H.artifactPct) + ' %.' : ''}</div></div>`
-    : '';
-  const hist = state.acts.filter(a => a.start <= act.start);
-  return `<div class="row sb"><div><h3>${SPORT_ICON[act.sport]} ${C.SPORTS[act.sport]} · ${esc(dateStr(act.start))}</h3><div class="muted">${esc(act.name)}</div></div>
+    ${kp('DFA α1 mediano', isNum(H.alphaMedian) ? f2(H.alphaMedian) : '—', isNum(H.pctBelow075) ? f0(H.pctBelow075) + ' % del tiempo &lt; 0,75' : '')}</div>
+    <canvas id="cHrv" style="height:200px"></canvas><div class="hint">DFA α1 en ventanas de 2 min (versión simplificada). Por debajo de 0,75 ≈ por encima del umbral aeróbico; por debajo de 0,5, esfuerzo muy alto. ${H.artifactPct > 0.5 ? 'Latidos descartados por artefactos: ' + f1(H.artifactPct) + ' %.' : ''}</div></div>` : '';
+  const hist = list.filter(a => a.start <= act.start);
+  return `<div class="row sb"><div><h3>${SPORT_ICON[act.sport]} ${C.SPORTS[act.sport]} · ${esc(dateStr(act.start))}</h3><div class="muted">Deportista: <b>${esc(at.name)}</b> · ${esc(act.name)}</div></div>
     <div class="row"><select id="selAct" style="width:auto;max-width:320px">${opts}</select><select id="selSport" style="width:auto" title="Cambiar deporte">${sports}</select><button class="btn danger sm" id="delAct">Eliminar</button></div></div>
     <div class="kpis">${kpis}</div>
-    <div class="card"><h2>Conclusiones de la sesión</h2>${insHtml(C.activityInsights(act, hist))}${GLOSSARY}</div>
+    <div class="card"><h2>Conclusiones de la sesión</h2>${insHtml(C.activityInsights(act, hist))}${completeBtn([act])}${GLOSSARY}</div>
     <div class="card"><h2>Frecuencia cardíaca y esfuerzo</h2><canvas id="cMain"></canvas></div>
     <div class="grid2"><div class="card"><h2>Tiempo en zonas de FC</h2>${zones}</div><div class="card"><h2>Acople cardíaco por mitades</h2>${dec}</div></div>
     ${hrvCard}
-    <div class="card"><h2>Subir más actividades</h2>${dropzone()}</div>`;
+    <div class="card"><h2>Subir más sesiones</h2>${dropzone()}</div>`;
 }
 
 function viewSemana() {
-  if (!state.acts.length) return dropzone();
-  if (!state.wk) state.wk = C.weekStartKey(state.acts[state.acts.length - 1].start);
-  const W = C.weekSummary(state.acts, state.wk);
+  const at = curAth(), list = mine();
+  if (!at) return noAthlete();
+  if (!list.length) return `<div class="card"><h3>${esc(at.name)}</h3><p class="muted">Este deportista no tiene sesiones.</p></div>` + dropzone();
+  if (!state.wk) state.wk = C.weekStartKey(list[list.length - 1].start);
+  const W = C.weekSummary(list, state.wk);
   const kp = (l, v, s) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="s">${s || '&nbsp;'}</div></div>`;
   const kpis = [
     kp('Sesiones', W.n, ''), kp('Tiempo', f1(W.dur / 3600) + ' h', W.prevDur ? 'sem. anterior ' + f1(W.prevDur / 3600) + ' h' : ''),
     kp('Distancia', f1(W.dist / 1000) + ' km', ''), kp('Carga', f0(W.load), isNum(W.loadChange) ? (W.loadChange >= 0 ? '+' : '') + f0(W.loadChange) + (W.partial ? ' % vs mismos días ant.' : ' % vs anterior') : ''),
-    kp('ACWR', isNum(W.acwr) ? f2(W.acwr) : '—', W.pmc ? (W.acwrReliable ? 'óptimo 0,8-1,3' : 'provisional') : ''),
+    kp('ACWR', isNum(W.acwr) ? f2(W.acwr) : '—', W.pmc ? (!isNum(W.acwr) ? 'faltan 14+ días' : W.acwrReliable ? 'óptimo 0,8-1,3' : 'provisional') : ''),
     kp('Forma (TSB)', isNum(W.tsb) ? f0(W.tsb) : '—', isNum(W.ctl) ? 'CTL ' + f0(W.ctl) + ' · ATL ' + f0(W.atl) : ''),
     kp('Monotonía', isFinite(W.monotony) ? f2(W.monotony) : '—', W.restDays + ' descanso(s)' + (W.partial ? ' · ' + W.elapsed + '/7 días' : ''))
   ].join('');
@@ -158,41 +255,44 @@ function viewSemana() {
   const zoneHtml = W.zoneTotal ? `<div class="zbar">${z.map((v, i) => `<div style="width:${v / zt * 100}%;background:${ZCOL[i]}"></div>`).join('')}</div>` +
     z.map((v, i) => `<div class="zrow"><span>${C.ZN[i]}</span><div><div class="b" style="width:${v / zt * 100}%;background:${ZCOL[i]};min-width:2px"></div></div><span>${fmtDur(v)} · ${f0(v / zt * 100)} %</span></div>`).join('') : '<div class="empty">Sin FC en esta semana.</div>';
   const rows = W.acts.slice().reverse().map(a => `<tr class="click" data-open="${a.id}"><td>${esc(new Date(a.start).toLocaleDateString('es', { weekday: 'short', day: 'numeric' }))}</td><td>${SPORT_ICON[a.sport]} ${C.SPORTS[a.sport]}</td><td>${fmtDur(a.A.dur)}</td><td>${a.A.hasSp ? f1(a.A.dist / 1000) + ' km' : '—'}</td><td>${f0(a.A.avgHr)}</td><td>${f0(a.A.load)}</td><td>${f2(a.A.IF)}</td><td>${a.A.decoupling && a.A.decoupling.valid ? f1(a.A.decoupling.pct) + ' %' : '—'}</td></tr>`).join('');
-  return `<div class="row sb"><div class="row"><button class="btn sm" id="wkPrev">◀</button><h3 style="margin:0">Semana ${esc(rangeStr(state.wk))}</h3><button class="btn sm" id="wkNext">▶</button></div>
+  return `<div class="row sb"><div class="row"><button class="btn sm" id="wkPrev">◀</button><h3 style="margin:0">${esc(at.name)} · semana ${esc(rangeStr(state.wk))}</h3><button class="btn sm" id="wkNext">▶</button></div>
     <div class="row"><button class="btn sm" id="wkNow">Última semana con datos</button></div></div>
     <div class="kpis">${kpis}</div>
-    <div class="card"><h2>Conclusiones de la semana</h2>${insHtml(C.weekInsights(W, state.profile))}${GLOSSARY}</div>
+    <div class="card"><h2>Conclusiones de la semana</h2>${insHtml(C.weekInsights(W, profileOf(at.id)))}${completeBtn(W.acts)}${GLOSSARY}</div>
     <div class="grid2"><div class="card"><h2>Carga por día</h2><canvas id="cDaily"></canvas></div>
     <div class="card"><h2>Forma, fatiga y balance (CTL · ATL · TSB)</h2><canvas id="cPmc"></canvas><div class="hint">${W.pmc && W.historyDays < 42 ? 'Con menos de ~6 semanas de histórico el modelo es provisional. ' : ''}Sube más semanas anteriores para afinarlo.</div></div></div>
     <div class="grid2"><div class="card"><h2>Distribución de intensidad (tiempo)</h2>${zoneHtml}</div>
     <div class="card"><h2>Sesiones de la semana</h2><div class="tw"><table><tr><th>Día</th><th>Deporte</th><th>Tiempo</th><th>Dist.</th><th>FC</th><th>Carga</th><th>Int.</th><th>Acople</th></tr>${rows || '<tr><td colspan="8" class="empty">Sin sesiones</td></tr>'}</table></div></div></div>
-    <div class="card"><h2>Subir más actividades</h2>${dropzone(' Para un análisis fiable de forma y fatiga sube también las 4-6 semanas anteriores.')}</div>`;
+    <div class="card"><h2>Subir más sesiones</h2>${dropzone(' Para un análisis fiable de forma y fatiga sube también las 4-6 semanas anteriores.')}</div>`;
 }
 
 function viewHistorial() {
-  if (!state.acts.length) return dropzone();
-  const rows = state.acts.slice().reverse().map(a => `<tr class="click" data-open="${a.id}"><td>${esc(new Date(a.start).toLocaleDateString('es'))}</td><td>${SPORT_ICON[a.sport]} ${C.SPORTS[a.sport]}</td><td>${fmtDur(a.A.dur)}</td><td>${a.A.hasSp ? f1(a.A.dist / 1000) : '—'}</td><td>${f0(a.A.avgHr)}</td><td>${f0(a.A.load)}</td><td>${f2(a.A.IF)}</td><td>${a.A.decoupling && a.A.decoupling.valid ? f1(a.A.decoupling.pct) + ' %' : '—'}</td><td>${a.A.hrv ? 'sí' : '—'}</td><td class="muted">${esc(a.name)}</td></tr>`).join('');
-  return `<div class="card"><div class="row sb" style="margin-bottom:10px"><h2 style="margin:0">Historial (${state.acts.length} actividades)</h2><div class="row"><button class="btn sm" id="expCsv">Exportar CSV</button><button class="btn sm danger" id="clearAll">Borrar todo</button></div></div>
+  const at = curAth(), list = mine();
+  if (!at) return noAthlete();
+  if (!list.length) return `<div class="card"><h3>${esc(at.name)}</h3><p class="muted">Este deportista no tiene sesiones.</p></div>` + dropzone();
+  const rows = list.slice().reverse().map(a => `<tr class="click" data-open="${a.id}"><td>${esc(new Date(a.start).toLocaleDateString('es'))}</td><td>${SPORT_ICON[a.sport]} ${C.SPORTS[a.sport]}</td><td>${fmtDur(a.A.dur)}</td><td>${a.A.hasSp ? f1(a.A.dist / 1000) : '—'}</td><td>${f0(a.A.avgHr)}</td><td>${f0(a.A.load)}</td><td>${f2(a.A.IF)}</td><td>${a.A.decoupling && a.A.decoupling.valid ? f1(a.A.decoupling.pct) + ' %' : '—'}</td><td>${a.A.hrv ? 'sí' : '—'}</td><td class="muted">${esc(a.name)}</td></tr>`).join('');
+  return `<div class="card"><div class="row sb" style="margin-bottom:10px"><h2 style="margin:0">Historial de ${esc(at.name)} (${list.length})</h2><div class="row"><button class="btn sm" id="expCsv">Exportar CSV</button></div></div>
     <div class="tw"><table><tr><th>Fecha</th><th>Deporte</th><th>Tiempo</th><th>Km</th><th>FC</th><th>Carga</th><th>Int.</th><th>Acople</th><th>R-R</th><th>Archivo</th></tr>${rows}</table></div>
-    <div class="hint">Tus actividades se guardan solo en este navegador/dispositivo. Exporta el CSV para conservar un resumen.</div></div>${dropzone()}`;
+    <div class="hint">Las sesiones se guardan solo en este navegador/dispositivo. Usa <b>Limpiar</b> para empezar de nuevo.</div></div>${dropzone()}`;
 }
 
 function viewPerfil() {
-  const p = state.profile;
-  return `<div class="card"><h2>Tu perfil fisiológico</h2><p class="muted" style="margin-top:0">Estos valores definen tus zonas y la carga. Al guardar se recalculan todas las actividades.</p>
-    <div class="form"><div><label>FC máxima (ppm)</label><input type="number" id="p_hrMax" value="${p.hrMax}" min="120" max="230"></div>
-    <div><label>FC en reposo (ppm)</label><input type="number" id="p_hrRest" value="${p.hrRest}" min="30" max="100"></div>
-    <div><label>FC umbral / LTHR (ppm, opcional)</label><input type="number" id="p_lthr" value="${p.lthrAuto ? '' : p.lthr}" placeholder="auto: ${Math.round(p.hrMax * 0.9)}" min="100" max="220"></div>
-    <div><label>FTP ciclismo (W, opcional)</label><input type="number" id="p_ftp" value="${p.ftp || ''}" placeholder="sin FTP: carga por FC" min="50" max="600"></div>
-    <div><label>Sexo (para el cálculo TRIMP)</label><select id="p_sex"><option value="m" ${p.sex !== 'f' ? 'selected' : ''}>Hombre</option><option value="f" ${p.sex === 'f' ? 'selected' : ''}>Mujer</option></select></div></div>
-    <div class="row" style="margin-top:14px"><button class="btn primary" id="saveProf">Guardar y recalcular</button></div>
-    <p class="hint">Consejo: tu FC umbral es aproximadamente la FC media de un esfuerzo máximo sostenido de 30 min (últimos 20 min de un test de 30 min). Sin ella, se usa el 90 % de tu FC máxima.</p></div>`;
+  const at = curAth();
+  const roster = state.athletes.map(a => `<tr class="click" data-ath="${a.id}"><td>${a.id === state.cur ? '● ' : ''}${esc(a.name)}</td><td>${state.acts.filter(x => x.ath === a.id).length} sesión(es)</td></tr>`).join('');
+  const head = `<div class="card"><div class="row sb"><h2 style="margin:0">Deportistas</h2><button class="btn sm" id="newAth">＋ Nuevo deportista</button></div>${state.athletes.length ? `<table style="margin-top:8px">${roster}</table>` : '<p class="muted">Aún no hay deportistas. Se crean al subir sesiones o con el botón de arriba.</p>'}</div>`;
+  if (!at) return head;
+  const p = at.profile || {}, obs = observedOf(at.id);
+  return head + `<div class="card"><h2>Datos de ${esc(at.name)}</h2><p class="muted" style="margin-top:0">Estos valores definen las zonas y la carga de este deportista. Los campos vacíos se estiman. Al guardar se recalculan sus sesiones.</p>
+    <div class="form"><div><label>Nombre</label><input id="p_name" value="${esc(at.name)}"></div></div><div style="height:12px"></div>
+    ${athleteFields(p, { hr: true, ftp: true, obs })}
+    <div class="row" style="margin-top:14px"><button class="btn primary" id="saveProf">Guardar y recalcular</button></div></div>`;
 }
 
 /* ---------- gráficos ---------- */
 function drawCharts() {
+  const list = mine();
   if (state.tab === 'actividad') {
-    const act = state.acts.find(a => a.id === state.sel); if (!act) return;
+    const act = list.find(a => a.id === state.sel); if (!act) return;
     const A = act.A, s = act.rs.s;
     const hr = C.downsample(s.hr, 500), step = hr.step, N = hr.v.length, x = Array.from({ length: N }, (_, i) => i * step);
     const series = [{ data: hr.v, color: '#ef4444', label: 'FC (ppm)', axis: 'l', fmt: v => Math.round(v) }];
@@ -204,15 +304,15 @@ function drawCharts() {
       else if (act.sport === 'swim') { series.push({ data: sp.map(v => isNum(v) && v > 0.2 ? Math.min(5, 100 / v / 60) : NaN), color: '#2563eb', label: 'Ritmo (min/100 m)', axis: 'r', fmt: fmtPaceMin }); yr = { invert: true, fmt: fmtPaceMin }; }
       else { series.push({ data: sp.map(v => isNum(v) ? v * 3.6 : NaN), color: '#2563eb', label: 'Velocidad (km/h)', axis: 'r', fmt: v => f1(v) }); yr = { min: 0, fmt: v => Math.round(v) }; }
     }
-    const el = $('cMain'); if (el) Charts.line(el, { x, xFmt: fmtClock, series, yl: { min: A.hasHr ? Math.max(40, Math.floor(C.mean(hr.v.filter(isNum)) - 60)) : undefined }, yr, empty: 'Este archivo no trae FC ni potencia/velocidad' });
+    const el = $('cMain'); if (el) Charts.line(el, { x, xFmt: fmtDur, series, yl: { min: A.hasHr ? Math.max(40, Math.floor(C.mean(hr.v.filter(isNum)) - 60)) : undefined }, yr, empty: 'Este archivo no trae FC ni potencia/velocidad' });
     const H = A.hrv, hv = $('cHrv');
-    if (H && hv) Charts.line(hv, { x: H.dfa.map(d => d.t), xFmt: fmtClock, series: [{ data: H.dfa.map(d => d.a), color: '#7c3aed', label: 'DFA α1', axis: 'l', fmt: v => (Math.round(v * 100) / 100).toLocaleString('es') }], yl: { min: 0, max: 1.5, fmt: v => (Math.round(v * 10) / 10).toLocaleString('es') }, bands: [{ from: 0.5, to: 0.75, color: 'rgba(124,58,237,.12)' }], empty: 'Muy pocos datos R-R' });
-  } else if (state.tab === 'semana' && state.acts.length) {
-    const W = C.weekSummary(state.acts, state.wk), lab = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
+    if (H && hv) Charts.line(hv, { x: H.dfa.map(d => d.t), xFmt: fmtDur, series: [{ data: H.dfa.map(d => d.a), color: '#7c3aed', label: 'DFA α1', axis: 'l', fmt: v => (Math.round(v * 100) / 100).toLocaleString('es') }], yl: { min: 0, max: 1.5, fmt: v => (Math.round(v * 10) / 10).toLocaleString('es') }, bands: [{ from: 0.5, to: 0.75, color: 'rgba(124,58,237,.12)' }], empty: 'Muy pocos datos R-R' });
+  } else if (state.tab === 'semana' && list.length && state.wk) {
+    const W = C.weekSummary(list, state.wk), lab = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
     const el = $('cDaily'); if (el) Charts.bars(el, { labels: lab, values: W.daily, color: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(), fmt: v => Math.round(v), empty: 'Sin carga registrada esta semana' });
     const pe = $('cPmc');
     if (pe && W.pmc) {
-      const end = C.addDays(state.wk, 6), ser = W.pmc.series.filter(r => r.day <= end).slice(-90);
+      const ser = W.pmc.series.filter(r => r.day <= W.endKey).slice(-90);
       Charts.line(pe, { x: ser.map(r => r.day), xFmt: d => C.keyToDate(d).toLocaleDateString('es', { day: 'numeric', month: 'short' }),
         series: [{ data: ser.map(r => r.ctl), color: '#2563eb', label: 'CTL forma', fmt: v => Math.round(v) }, { data: ser.map(r => r.atl), color: '#ef4444', label: 'ATL fatiga', fmt: v => Math.round(v) }, { data: ser.map(r => r.tsb), color: '#16a34a', label: 'TSB balance', fmt: v => Math.round(v) }], empty: 'Sin datos de carga' });
     } else if (pe) Charts.line(pe, { x: [], series: [], empty: 'Sin datos de carga' });
@@ -220,8 +320,14 @@ function drawCharts() {
 }
 
 /* ---------- render y eventos ---------- */
-function render() {
+function renderHeader() {
+  const sel = $('athSel');
+  sel.style.display = state.athletes.length ? 'block' : 'none';
+  sel.innerHTML = state.athletes.map(a => `<option value="${a.id}" ${a.id === state.cur ? 'selected' : ''}>👤 ${esc(a.name)}</option>`).join('');
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('on', b.dataset.t === state.tab));
+}
+function render() {
+  renderHeader();
   const v = { actividad: viewActividad, semana: viewSemana, historial: viewHistorial, perfil: viewPerfil }[state.tab];
   $('main').innerHTML = v();
   bind(); requestAnimationFrame(drawCharts);
@@ -230,36 +336,39 @@ function bind() {
   document.querySelectorAll('[data-go]').forEach(a => a.onclick = e => { e.preventDefault(); setTab(a.dataset.go); });
   const drop = $('drop'); if (drop) drop.onclick = () => $('files').click();
   document.querySelectorAll('[data-open]').forEach(r => r.onclick = () => { state.sel = r.dataset.open; setTab('actividad'); });
+  document.querySelectorAll('[data-ath]').forEach(r => r.onclick = () => { state.cur = r.dataset.ath; saveAthletes(); selectLatest(); render(); });
   const sa = $('selAct'); if (sa) sa.onchange = () => { state.sel = sa.value; render(); };
-  const ss = $('selSport'); if (ss) ss.onchange = async () => { const a = state.acts.find(x => x.id === state.sel); a.sport = ss.value; Object.assign(a, build(a)); await persist(a); render(); };
-  const da = $('delAct'); if (da) da.onclick = async () => { if (!confirm('¿Eliminar esta actividad?')) return; const id = state.sel; state.acts = state.acts.filter(a => a.id !== id); try { if (state.persist) await DB.del(id); } catch (e) { } state.sel = null; render(); };
+  const ss = $('selSport'); if (ss) ss.onchange = async () => { const a = state.acts.find(x => x.id === state.sel); a.sport = ss.value; analyzeAthlete(a.ath); await persist(a); render(); };
+  const da = $('delAct'); if (da) da.onclick = async () => { if (!confirm('¿Eliminar esta sesión?')) return; await removeActs([state.sel]); selectLatest(); render(); };
   const wp = $('wkPrev'); if (wp) wp.onclick = () => { state.wk = C.addDays(state.wk, -7); render(); };
   const wn = $('wkNext'); if (wn) wn.onclick = () => { state.wk = C.addDays(state.wk, 7); render(); };
-  const wo = $('wkNow'); if (wo) wo.onclick = () => { state.wk = C.weekStartKey(state.acts[state.acts.length - 1].start); render(); };
+  const wo = $('wkNow'); if (wo) wo.onclick = () => { const l = mine(); state.wk = C.weekStartKey(l[l.length - 1].start); render(); };
+  const na = $('newAth'); if (na) na.onclick = () => { const a = { id: 'a' + Date.now(), name: 'Deportista ' + (state.athletes.length + 1), profile: {} }; state.athletes.push(a); state.cur = a.id; saveAthletes(); selectLatest(); render(); };
   const sp = $('saveProf'); if (sp) sp.onclick = () => {
-    const g = id => +$(id).value;
-    const p = { hrMax: g('p_hrMax'), hrRest: g('p_hrRest'), lthr: g('p_lthr') || 0, ftp: g('p_ftp') || 0, sex: $('p_sex').value };
-    if (!(p.hrMax > p.hrRest + 20)) { toast('La FC máxima debe ser bastante mayor que la de reposo.'); return; }
-    state.profile = C.normProfile(p); saveProfile(p); recompute(); toast('Perfil guardado. Actividades recalculadas.'); render();
+    const at = curAth(), p = { hrMax: num('m_hrMax'), hrRest: num('m_hrRest'), lthr: num('m_lthr'), ftp: num('m_ftp'), sex: $('m_sex').value };
+    const name = $('p_name').value.trim(); if (!name) { toast('El deportista necesita un nombre.'); return; }
+    const err = checkProfile(p); if (err) { toast(err); return; }
+    at.name = name; at.profile = p; saveAthletes(); analyzeAthlete(at.id); toast('Datos guardados. Sesiones recalculadas.'); render();
   };
   const ex = $('expCsv'); if (ex) ex.onclick = () => {
-    const q = v => '"' + String(v).replace(/"/g, '""') + '"';
-    const head = 'fecha,deporte,duracion_min,distancia_km,fc_media,fc_max,potencia_np,carga,intensidad_rel,desacople_pct,archivo';
+    const q = v => '"' + String(v).replace(/"/g, '""') + '"', at = curAth();
     const n1 = v => isNum(v) ? (Math.round(v * 10) / 10).toString() : '', n0 = v => isNum(v) ? Math.round(v).toString() : '';
-    const rows = state.acts.map(a => [C.dayKey(a.start), C.SPORTS[a.sport], n1(a.A.dur / 60), n1(a.A.dist / 1000), n0(a.A.avgHr), n0(a.A.maxHr), n0(a.A.np), n1(a.A.load), isNum(a.A.IF) ? a.A.IF.toFixed(2) : '', a.A.decoupling && a.A.decoupling.valid ? n1(a.A.decoupling.pct) : '', q(a.name)].join(','));
-    const url = URL.createObjectURL(new Blob([head + '\n' + rows.join('\n')], { type: 'text/csv' })); const l = document.createElement('a'); l.href = url; l.download = 'actividades.csv'; l.click(); URL.revokeObjectURL(url);
+    const head = 'deportista,fecha,deporte,duracion_min,distancia_km,fc_media,fc_max,potencia_np,carga,intensidad_rel,desacople_pct,archivo';
+    const rows = mine().map(a => [q(at.name), C.dayKey(a.start), C.SPORTS[a.sport], n1(a.A.dur / 60), n1(a.A.dist / 1000), n0(a.A.avgHr), n0(a.A.maxHr), n0(a.A.np), n1(a.A.load), isNum(a.A.IF) ? a.A.IF.toFixed(2) : '', a.A.decoupling && a.A.decoupling.valid ? n1(a.A.decoupling.pct) : '', q(a.name)].join(','));
+    const url = URL.createObjectURL(new Blob([head + '\n' + rows.join('\n')], { type: 'text/csv' })); const l = document.createElement('a'); l.href = url; l.download = 'sesiones-' + at.name.replace(/\W+/g, '_') + '.csv'; l.click(); URL.revokeObjectURL(url);
   };
-  const ca = $('clearAll'); if (ca) ca.onclick = async () => { if (!confirm('¿Borrar todas las actividades? No se puede deshacer.')) return; state.acts = []; state.sel = null; try { if (state.persist) await DB.clear(); } catch (e) { } render(); };
 }
 
 document.querySelectorAll('#nav button').forEach(b => b.onclick = () => setTab(b.dataset.t));
 $('upload').onclick = () => $('files').click();
-$('files').onchange = e => { importFiles(e.target.files); e.target.value = ''; };
+$('clear').onclick = openClear;
+$('files').onchange = e => { const f = [...e.target.files]; e.target.value = ''; openFiles(f); };
+$('athSel').onchange = e => { state.cur = e.target.value; saveAthletes(); selectLatest(); render(); };
 let dragN = 0;
 window.addEventListener('dragenter', e => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { dragN++; $('over').style.display = 'flex'; } });
 window.addEventListener('dragleave', () => { dragN = Math.max(0, dragN - 1); if (!dragN) $('over').style.display = 'none'; });
 window.addEventListener('dragover', e => e.preventDefault());
-window.addEventListener('drop', e => { e.preventDefault(); dragN = 0; $('over').style.display = 'none'; if (e.dataTransfer.files.length) importFiles(e.dataTransfer.files); });
+window.addEventListener('drop', e => { e.preventDefault(); dragN = 0; $('over').style.display = 'none'; if (e.dataTransfer.files.length) openFiles([...e.dataTransfer.files]); });
 window.addEventListener('resize', () => { clearTimeout(window._rt); window._rt = setTimeout(drawCharts, 120); });
 matchMedia('(prefers-color-scheme:dark)').addEventListener('change', () => render());
 
@@ -270,15 +379,20 @@ window.addEventListener('appinstalled', () => $('install').style.display = 'none
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => { });
 
 (async function init() {
+  state.athletes = LS.get('tl3.athletes', []); state.cur = LS.get('tl3.cur', null);
   try {
     if (!window.indexedDB) throw new Error('sin IndexedDB');
     state.db = await DB.open();
-    const recs = await DB.all(), bad = [];
-    for (const r of recs) { try { state.acts.push(build(r)); } catch (e) { bad.push(r.id); } }
-    sortActs();
-    if (state.acts.length) { const l = state.acts[state.acts.length - 1]; state.sel = l.id; state.wk = C.weekStartKey(l.start); }
+    const recs = await DB.all();
+    // migración: sesiones de la versión anterior (sin deportista) se asignan a "Deportista 1" con su perfil
+    if (recs.some(r => !r.ath) && !state.athletes.length) { const old = LS.get('tl2.profile', {}); state.athletes.push({ id: 'a_legacy', name: 'Deportista 1', profile: { hrMax: old.hrMax || 0, hrRest: old.hrRest || 0, lthr: old.lthr || 0, ftp: old.ftp || 0, sex: old.sex || 'm' } }); state.cur = 'a_legacy'; }
+    for (const r of recs) { if (!r.ath) r.ath = state.athletes[0].id; if (r.obs == null) r.obs = C.observedMaxHr(r.rs); state.acts.push({ id: r.id, name: r.name, sport: r.sport, start: r.start, day: C.dayKey(r.start), rs: r.rs, rr: r.rr, ath: r.ath, obs: r.obs, A: null }); }
   } catch (e) { state.persist = false; }
-  window.__state = state; // para depuración
+  if (!state.athletes.find(a => a.id === state.cur)) state.cur = state.athletes[0] ? state.athletes[0].id : null;
+  for (const at of state.athletes) { try { analyzeAthlete(at.id); } catch (e) { } }
+  state.acts = state.acts.filter(a => a.A);
+  saveAthletes(); selectLatest();
+  window.__state = state;
   render();
 })();
 })();

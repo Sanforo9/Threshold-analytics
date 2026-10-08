@@ -73,6 +73,16 @@ tr.click{cursor:pointer}tr.click:hover{background:var(--infobg)}
 details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-weight:600}
 details p{margin:6px 0}
 #install{display:none}
+.mbg{position:fixed;inset:0;background:rgba(10,18,24,.55);z-index:40;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:30px 14px}
+.modal{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;max-width:760px;width:100%}
+.modal h3{margin:0 0 4px;font-size:18px}
+.modal .sec{margin-top:16px}
+.modal .sec>b{display:block;margin-bottom:6px}
+.fl{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+.chip{font-size:11px;background:var(--infobg);color:var(--info);border-radius:99px;padding:1px 8px;font-weight:700}
+.need{font-size:11px;color:var(--warn);font-weight:700}
+.btn.big{display:block;width:100%;text-align:left;margin:8px 0;padding:12px 14px}
+.btn.big small{display:block;color:var(--muted);font-weight:400}
 #over{position:fixed;inset:0;background:rgba(15,118,110,.18);border:4px dashed var(--accent);display:none;align-items:center;justify-content:center;font-size:24px;font-weight:700;z-index:50;pointer-events:none;color:var(--ink)}
 #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;max-width:90vw;z-index:60;display:none;white-space:pre-line;font-size:14px}
 .pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:700;background:var(--infobg);color:var(--info)}
@@ -89,12 +99,15 @@ details p{margin:6px 0}
     <button data-t="perfil">Perfil</button>
   </nav>
   <div class="row">
-    <button class="btn primary" id="upload">＋ Subir actividades</button>
+    <select id="athSel" style="width:auto;max-width:200px;display:none" title="Deportista"></select>
+    <button class="btn primary" id="upload">＋ Subir sesiones</button>
+    <button class="btn" id="clear" title="Limpiar sesiones para empezar de nuevo">🧹 Limpiar</button>
     <button class="btn" id="install">⬇ Instalar app</button>
     <input type="file" id="files" accept=".fit,.gpx,.tcx" multiple hidden>
   </div>
 </div></header>
 <main id="main"></main>
+<div id="modal"></div>
 <div id="over">Suelta tus archivos .fit / .gpx / .tcx</div>
 <div id="toast"></div>
 <script src="core.js"></script>
