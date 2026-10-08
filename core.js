@@ -5,7 +5,11 @@
 
 const SPORTS = { run: 'Carrera', bike: 'Ciclismo', swim: 'Natación', other: 'Otro' };
 const ZN = ['Z1 Recuperación', 'Z2 Aeróbica', 'Z3 Tempo', 'Z4 Umbral', 'Z5 VO₂máx'];
-const ZLIM = [0.81, 0.90, 0.94, 1.00]; // límites superiores Z1..Z4 como fracción de la FC umbral
+// Zonas de FC según Coggan/TrainingPeaks (% de la FC umbral): Z1 <69, Z2 69-83, Z3 84-94, Z4 95-105, Z5 ≥106
+const ZLIM = [0.69, 0.84, 0.95, 1.06]; // límites superiores Z1..Z4 como fracción de la FC umbral
+// Zonas de potencia Coggan (% del FTP): Z1 <56, Z2 56-75, Z3 76-90, Z4 91-105, Z5 106-120, Z6 121-150, Z7 >150
+const PZN = ['Z1 Recuperación', 'Z2 Resistencia', 'Z3 Tempo', 'Z4 Umbral', 'Z5 VO₂máx', 'Z6 Capacidad anaeróbica', 'Z7 Neuromuscular'];
+const PZLIM = [0.56, 0.76, 0.91, 1.06, 1.21, 1.51];
 const FIT_EPOCH = 631065600;
 const GAP = 10; // segundos máximos que se interpolan
 
@@ -334,6 +338,11 @@ function analyze(rs, sport, rrAll, profileIn) {
     const trimpHour = trimpOf(P.lthr) * 60; // TRIMP acumulado en 1 h a FC umbral
     A.hrTss = trimp / trimpHour * 100;
   }
+  if (sport === 'bike' && A.hasPw && P.ftp > 0) {
+    const pz = [0, 0, 0, 0, 0, 0, 0];
+    for (let i = 0; i < n; i++) { const v = s.pw[i]; if (!isNum(v)) continue; const r = v / P.ftp; let k = 6; for (let j = 0; j < 6; j++) if (r < PZLIM[j]) { k = j; break; } pz[k]++; }
+    A.pzones = pz;
+  }
   if (sport === 'bike' && A.hasPw && P.ftp > 0 && isNum(A.np)) {
     A.IF = A.np / P.ftp; A.load = (A.dur / 3600) * A.IF * A.IF * 100; A.loadMethod = 'potencia (TSS)';
   } else if (isNum(A.hrTss)) {
@@ -499,7 +508,8 @@ function activityInsights(act, history) {
     const hi = pct[3] + pct[4];
     let t = 'Mayor parte del tiempo en ' + ZN[dom] + ' (' + f0(pct[dom]) + ' %). ';
     if (hi >= 20) t += 'Pasó ' + f0(hi) + ' % en Z4-Z5 (' + f0((A.zones[3] + A.zones[4]) / 60) + ' min): estímulo de calidad que pide recuperación.'; else if (pct[0] + pct[1] >= 80) t += 'Más del 80 % en Z1-Z2: sesión aeróbica de bajo estrés.'; else t += 'Mezcla de zonas con un bloque relevante de Z3 (zona "gris").';
-    add(hi >= 35 ? 'warn' : 'ok', 'Distribución de zonas', t + ' Zonas calculadas con la FC umbral de ' + A.profile.lthr + ' ppm' + (A.profile.lthrAuto ? ' (estimada como 90 % de la FC máx; introduce la real del deportista para más precisión).' : '.'));
+    if (A.pzones) { const pt = A.pzones.reduce((x, y) => x + y, 0) || 1, pp = A.pzones.map(v => v / pt * 100), pd = pp.indexOf(Math.max(...pp)); t += ' Por potencia (FTP ' + A.profile.ftp + ' W): ' + f0(pp[pd]) + ' % en ' + PZN[pd] + '.'; }
+    add(hi >= 35 ? 'warn' : 'ok', 'Distribución de zonas', t + ' Zonas de FC (Coggan) con la FC umbral de ' + A.profile.lthr + ' ppm' + (A.profile.lthrAuto ? ' (estimada como 90 % de la FC máx; introduce la real del deportista para más precisión).' : '.'));
   }
   // Acople
   const D = A.decoupling;
@@ -718,7 +728,7 @@ function weekOverview(W) {
   return { level, headline, points: pts, advice, caveat: cav.join(' ') };
 }
 
-const Core = { activityOverview, weekOverview, observedMaxHr, SPORTS, ZN, ZLIM, FIT_EPOCH, normProfile, parseFit, parseXml, resample, analyze, analyzeHrv, dfaAlpha1, cleanRR, hrvTime, downsample,
+const Core = { activityOverview, weekOverview, observedMaxHr, SPORTS, ZN, ZLIM, PZN, PZLIM, FIT_EPOCH, normProfile, parseFit, parseXml, resample, analyze, analyzeHrv, dfaAlpha1, cleanRR, hrvTime, downsample,
   pmc, weekSummary, f0, f1, f2, activityInsights, weekInsights, dailyLoads, dayKey, keyToDate, weekStartKey, addDays, daysBetween, isNum, mean, sd, median, movAvg, normalizedPower, guessSport };
 if (typeof module !== 'undefined' && module.exports) module.exports = Core; else root.Core = Core;
 })(typeof window !== 'undefined' ? window : globalThis);

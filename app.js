@@ -4,6 +4,7 @@ const C = Core, $ = id => document.getElementById(id), isNum = C.isNum;
 const state = { acts: [], athletes: [], cur: null, tab: 'actividad', sel: null, wk: null, db: null, persist: true, pending: null };
 const SPORT_ICON = { run: '🏃', bike: '🚴', swim: '🏊', other: '🏋️' };
 const ZCOL = ['var(--z1)', 'var(--z2)', 'var(--z3)', 'var(--z4)', 'var(--z5)'];
+const PZCOL = ['var(--z1)', 'var(--z2)', 'var(--z3)', 'var(--z4)', 'var(--z5)', '#c026d3', '#7c3aed'];
 
 /* ---------- utilidades ---------- */
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -218,12 +219,20 @@ function viewActividad() {
     isNum(A.ef) ? kp('Eficiencia', f1(A.ef), A.outType === 'pw' ? 'W por latido' : 'm/min por latido') : '',
     isNum(A.ascent) ? kp('Desnivel +', f0(A.ascent) + ' m', '') : ''
   ].join('');
-  const zones = A.zones ? (() => {
-    const tot = A.zones.reduce((x, y) => x + y, 0) || 1;
-    return `<div class="zbar">${A.zones.map((v, i) => `<div style="width:${v / tot * 100}%;background:${ZCOL[i]}"></div>`).join('')}</div>` +
-      A.zones.map((v, i) => `<div class="zrow"><span>${C.ZN[i]}</span><div><div class="b" style="width:${v / tot * 100}%;background:${ZCOL[i]};min-width:2px"></div></div><span>${fmtDur(v)} · ${f0(v / tot * 100)} %</span></div>`).join('') +
-      `<div class="hint">Según FC umbral ${A.profile.lthr} ppm${A.profile.lthrAuto ? ' (estimada)' : ''}: Z1 &lt;81 %, Z2 81-90 %, Z3 90-94 %, Z4 94-100 %, Z5 ≥100 %.</div>`;
-  })() : '<div class="empty">Sin frecuencia cardíaca en este archivo.</div>';
+  const zoneRows = (arr, names, cols, ranges) => {
+    const tot = arr.reduce((x, y) => x + y, 0) || 1;
+    return `<div class="zbar">${arr.map((v, i) => `<div style="width:${v / tot * 100}%;background:${cols[i]}"></div>`).join('')}</div>` +
+      arr.map((v, i) => `<div class="zrow"><span title="${ranges[i]}">${names[i]}</span><div><div class="b" style="width:${v / tot * 100}%;background:${cols[i]};min-width:2px"></div></div><span>${fmtDur(v)} · ${f0(v / tot * 100)} %</span></div>`).join('');
+  };
+  const hrB = C.ZLIM.map(x => Math.round(x * A.profile.lthr));
+  const hrRanges = [`&lt;${hrB[0]} ppm`, `${hrB[0]}-${hrB[1] - 1} ppm`, `${hrB[1]}-${hrB[2] - 1} ppm`, `${hrB[2]}-${hrB[3] - 1} ppm`, `≥${hrB[3]} ppm`];
+  const zones = A.zones ? zoneRows(A.zones, C.ZN.map((n, i) => `${n} <small class="muted">${hrRanges[i]}</small>`), ZCOL, hrRanges) +
+      `<div class="hint">Zonas Coggan según FC umbral ${A.profile.lthr} ppm${A.profile.lthrAuto ? ' (estimada)' : ''}: Z1 &lt;69 %, Z2 69-83 %, Z3 84-94 %, Z4 95-105 %, Z5 ≥106 %. Si usas otros límites en tu plataforma, cambia la FC umbral en Perfil para que coincidan.</div>`
+    : '<div class="empty">Sin frecuencia cardíaca en este archivo.</div>';
+  const pB = C.PZLIM.map(x => Math.round(x * (A.profile.ftp || 0)));
+  const pRanges = [`&lt;${pB[0]} W`, `${pB[0]}-${pB[1] - 1} W`, `${pB[1]}-${pB[2] - 1} W`, `${pB[2]}-${pB[3] - 1} W`, `${pB[3]}-${pB[4] - 1} W`, `${pB[4]}-${pB[5] - 1} W`, `≥${pB[5]} W`];
+  const pzCard = A.pzones ? `<div class="card"><h2>Tiempo en zonas de potencia</h2>${zoneRows(A.pzones, C.PZN.map((n, i) => `${n} <small class="muted">${pRanges[i]}</small>`), PZCOL, pRanges)}
+    <div class="hint">Zonas Coggan según FTP ${A.profile.ftp} W: Z1 &lt;56 %, Z2 56-75 %, Z3 76-90 %, Z4 91-105 %, Z5 106-120 %, Z6 121-150 %, Z7 &gt;150 %. Incluye los ceros (paradas) en Z1.</div></div>` : '';
   const D = A.decoupling;
   const dec = D && D.valid ? `<table><tr><th></th><th>1ª mitad</th><th>2ª mitad</th><th>Cambio</th></tr>
     <tr><td>FC media</td><td>${f0(D.e1.hr)} ppm</td><td>${f0(D.e2.hr)} ppm</td><td>${D.e2.hr - D.e1.hr >= 0 ? '+' : ''}${f1(D.e2.hr - D.e1.hr)}</td></tr>
@@ -243,7 +252,8 @@ function viewActividad() {
     <div class="kpis">${kpis}</div>
     <div class="card"><h2>Conclusiones de la sesión</h2>${insHtml(C.activityInsights(act, hist))}${completeBtn([act])}${GLOSSARY}</div>
     <div class="card"><h2>Frecuencia cardíaca y esfuerzo</h2><canvas id="cMain"></canvas></div>
-    <div class="grid2"><div class="card"><h2>Tiempo en zonas de FC</h2>${zones}</div><div class="card"><h2>Acople cardíaco por mitades</h2>${dec}</div></div>
+    <div class="grid2"><div class="card"><h2>Tiempo en zonas de FC</h2>${zones}</div>${pzCard || `<div class="card"><h2>Acople cardíaco por mitades</h2>${dec}</div>`}</div>
+    ${pzCard ? `<div class="card"><h2>Acople cardíaco por mitades</h2>${dec}</div>` : ''}
     ${hrvCard}
     <div class="card"><h2>Subir más sesiones</h2>${dropzone()}</div>`;
 }
@@ -389,7 +399,11 @@ let deferred;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; $('install').style.display = 'inline-block'; });
 $('install').onclick = async () => { if (!deferred) return; deferred.prompt(); await deferred.userChoice; deferred = null; $('install').style.display = 'none'; };
 window.addEventListener('appinstalled', () => $('install').style.display = 'none');
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => { });
+if ('serviceWorker' in navigator) {
+  // limpia registros del service worker antiguo (sw.js) y registra el nuevo
+  navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => { const u = (r.active || r.waiting || r.installing || {}).scriptURL || ''; if (/\/sw\.js$/.test(u)) r.unregister(); })).catch(() => { });
+  navigator.serviceWorker.register('service-worker.js').catch(() => { });
+}
 
 (async function init() {
   state.athletes = LS.get('tl3.athletes', []); state.cur = LS.get('tl3.cur', null);
