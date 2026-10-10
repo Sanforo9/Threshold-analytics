@@ -26,10 +26,11 @@ function prefix(arr) {
   return { ps, pc, n };
 }
 // mejor ventana de L segundos (promedio máx.), exigiendo cobertura mínima; [from,to) limita dónde buscar
-function bestWindow(arr, L, minCov = 0.95, from = 0, to = arr.length, P) {
+function bestWindow(arr, L, minCov = 0.95, from = 0, to = arr.length, P, accept) {
   P = P || prefix(arr); let best = null;
   for (let s = Math.max(0, from); s + L <= Math.min(to, P.n); s++) {
     const c = P.pc[s + L] - P.pc[s]; if (c < L * minCov) continue;
+    if (accept && !accept(s, s + L)) continue;
     const avg = (P.ps[s + L] - P.ps[s]) / c;
     if (!best || avg > best.avg) best = { s, e: s + L, avg };
   }
@@ -186,16 +187,33 @@ function compute(id, rs, P, opts) {
     const h = [hrAvg(r[0].s, r[0].e), hrAvg(r[1].s, r[1].e)]; if (isNum(h[0])) R.notes.push('FC media por repetición: ' + nf(h[0]) + ' y ' + nf(h[1]) + ' ppm (el Excel de este test no calcula FTHR).');
     R.out = { ftp }; R.apply = { ftp: Math.round(ftp) }; R.headline = 'FTP ' + nf(ftp) + ' W'; R.zones.push(zonesBike(ftp));
   } else if (id === 'bike_step') {
-    const steps = detectSteps(s.pw), w3 = bestWindow(s.pw, 180, 0.9); if (!w3) return Object.assign(R, { error: 'No hay 3 minutos continuos con potencia.' });
-    const ftp = w3.avg * 0.85; R.win = { s: w3.s, e: w3.e };
-    R.steps = steps.map((p, i) => ({ n: i + 1, s: p.s, dur: p.e - p.s, pw: p.pw, hr: hrAvg(p.s + ((p.e - p.s) >> 1), p.e) }));
-    R.calc.push(['Mejores 3 min de potencia', nf(w3.avg) + ' W'], ['FTP = mejores 3 min × 0,85', nf(ftp) + ' W']);
-    R.out = { ftp }; R.apply = { ftp: Math.round(ftp) }; R.headline = 'FTP ' + nf(ftp) + ' W';
-    const k = opts.stepIdx;
-    if (R.steps.length && isNum(k) && R.steps[k] && isNum(R.steps[k].hr)) {
-      const fthr = R.steps[k].hr; R.out.fthr = fthr; R.apply.lthr = Math.round(fthr);
-      R.calc.push(['FTHR = FC media del escalón ' + R.steps[k].n + ' (umbral)', nf(fthr) + ' ppm']); R.headline += ' · FTHR ' + nf(fthr) + ' ppm'; R.zones.push(zonesBike(ftp), zonesHr(fthr, P.hrRest, P.hrMax));
-    } else { R.needsStep = true; R.notes.push('Elige el escalón que corresponde al umbral para obtener la FTHR (en el Excel es un dato que se introduce a mano).'); R.zones.push(zonesBike(ftp)); }
+    // mejores 3 min de potencia con cadencia media mínima de 75 rpm
+    const MIN_CAD = 75, cp = prefix(s.cad), hasCad = cp.pc[cp.n] > s.cad.length * 0.5;
+    const cadOf = (a, b) => { const c = cp.pc[b] - cp.pc[a]; return c ? (cp.ps[b] - cp.ps[a]) / c : NaN; };
+    const w3 = bestWindow(s.pw, 180, 0.9, 0, s.pw.length, undefined, hasCad ? (a, b) => cadOf(a, b) >= MIN_CAD : null);
+    const free = bestWindow(s.pw, 180, 0.9); if (!free) return Object.assign(R, { error: 'No hay 3 minutos continuos con potencia.' });
+    const steps = detectSteps(s.pw), k = opts.stepIdx;
+    R.steps = steps.map((p, i) => ({ n: i + 1, s: p.s, dur: p.e - p.s, pw: p.pw, hr: hrAvg(p.s + ((p.e - p.s) >> 1), p.e), cad: (() => { const v = cadOf(p.s, p.e); return isNum(v) ? v : NaN; })() }));
+    if (!hasCad) {
+      R.win = { s: free.s, e: free.e }; R.invalid = true;
+      R.calc.push(['Mejores 3 min de potencia (sin comprobar cadencia)', nf(free.avg) + ' W']);
+      R.notes.push('Este archivo no trae cadencia, así que no se puede comprobar el mínimo de ' + MIN_CAD + ' rpm de promedio que exige el test. El valor es solo orientativo y no se puede aplicar al perfil.');
+      R.out = { ftp: free.avg * 0.85 }; R.headline = 'FTP ~' + nf(free.avg * 0.85) + ' W (sin validar cadencia)'; R.zones.push(zonesBike(free.avg * 0.85));
+    } else if (!w3) {
+      R.win = { s: free.s, e: free.e }; R.invalid = true;
+      R.calc.push(['Mejores 3 min de potencia (sin filtro de cadencia)', nf(free.avg) + ' W', ], ['Cadencia media de ese tramo', nf(cadOf(free.s, free.e)) + ' rpm']);
+      R.notes.push('Ningún tramo de 3 min tiene una cadencia media de al menos ' + MIN_CAD + ' rpm, así que el test no es válido según el protocolo. El valor mostrado es solo de referencia y no se puede aplicar al perfil.');
+      R.out = { ftp: free.avg * 0.85 }; R.headline = 'Test no válido (cadencia < ' + MIN_CAD + ' rpm)'; R.zones.push(zonesBike(free.avg * 0.85));
+    } else {
+      const ftp = w3.avg * 0.85, cad = cadOf(w3.s, w3.e); R.win = { s: w3.s, e: w3.e };
+      R.calc.push(['Mejores 3 min de potencia con cadencia media ≥ ' + MIN_CAD + ' rpm', nf(w3.avg) + ' W'], ['Cadencia media de ese tramo', nf(cad) + ' rpm'], ['FTP = mejores 3 min × 0,85', nf(ftp) + ' W']);
+      if (free.avg > w3.avg * 1.005) R.notes.push('Hubo un tramo de 3 min con más potencia (' + nf(free.avg) + ' W) pero con cadencia media de ' + nf(cadOf(free.s, free.e)) + ' rpm, por debajo del mínimo; no se usa.');
+      R.out = { ftp }; R.apply = { ftp: Math.round(ftp) }; R.headline = 'FTP ' + nf(ftp) + ' W';
+      if (R.steps.length && isNum(k) && R.steps[k] && isNum(R.steps[k].hr)) {
+        const fthr = R.steps[k].hr; R.out.fthr = fthr; R.apply.lthr = Math.round(fthr);
+        R.calc.push(['FTHR = FC media del escalón ' + R.steps[k].n + ' (umbral)', nf(fthr) + ' ppm']); R.headline += ' · FTHR ' + nf(fthr) + ' ppm'; R.zones.push(zonesBike(ftp), zonesHr(fthr, P.hrRest, P.hrMax));
+      } else { R.needsStep = true; R.notes.push('Elige el escalón que corresponde al umbral para obtener la FTHR (en el Excel es un dato que se introduce a mano).'); R.zones.push(zonesBike(ftp)); }
+    }
   } else if (id === 'run_20' || id === 'run_12') {
     const L = id === 'run_20' ? 1200 : 720, w = speedWindow(rs, L); if (!w || !(w.avg > 0.5)) return Object.assign(R, { error: 'No hay ' + (L / 60) + ' minutos continuos con velocidad.' });
     const pace = 1000 / w.avg, thr = id === 'run_20' ? pace * 1.05 : pace * 1.03 * 1.05;

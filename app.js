@@ -342,9 +342,9 @@ function viewTests() {
   if (R && R.error) res = `<div class="card"><h2>Resultado</h2><div class="empty">${esc(R.error)}</div></div>`;
   else if (R) {
     const w = R.win ? `Tramo usado: ${fmtDur(R.win.s)} – ${fmtDur(R.win.e)} de la sesión.` : '';
-    const steps = R.steps && R.steps.length ? `<h3 style="margin:14px 0 6px;font-size:14px">Escalones detectados</h3><div class="tw"><table><tr><th>Umbral</th><th>#</th><th>Duración</th><th>Potencia</th><th>FC (2ª mitad)</th></tr>${R.steps.map((p, i) => `<tr><td><input type="radio" name="tstep" value="${i}" ${state.tStep === i ? 'checked' : ''} style="width:auto"></td><td>${p.n}</td><td>${fmtDur(p.dur)}</td><td>${f0(p.pw)} W</td><td>${isNum(p.hr) ? f0(p.hr) + ' ppm' : '—'}</td></tr>`).join('')}</table></div>` : '';
+    const steps = R.steps && R.steps.length ? `<h3 style="margin:14px 0 6px;font-size:14px">Escalones detectados</h3><div class="tw"><table><tr><th>Umbral</th><th>#</th><th>Duración</th><th>Potencia</th><th>Cadencia</th><th>FC (2ª mitad)</th></tr>${R.steps.map((p, i) => `<tr><td><input type="radio" name="tstep" value="${i}" ${state.tStep === i ? 'checked' : ''} style="width:auto"></td><td>${p.n}</td><td>${fmtDur(p.dur)}</td><td>${f0(p.pw)} W</td><td>${isNum(p.cad) ? f0(p.cad) + ' rpm' : '—'}</td><td>${isNum(p.hr) ? f0(p.hr) + ' ppm' : '—'}</td></tr>`).join('')}</table></div>` : '';
     const ap = R.apply, bits = [ap.ftp ? 'FTP ' + ap.ftp + ' W' : '', ap.lthr ? 'FC umbral ' + ap.lthr + ' ppm' : '', ap.runThr ? 'umbral de carrera ' + TestLab.fmtPace(ap.runThr) + ' /km' : '', ap.runFtp ? 'FTP de carrera ' + ap.runFtp + ' W' : '', ap.swimThr ? 'umbral de natación ' + TestLab.fmtPace(ap.swimThr) + ' /100 m' : ''].filter(Boolean);
-    res = `<div class="card"><div class="row sb"><h2 style="margin:0">Resultado del test</h2><button class="btn primary" id="applyTest">Aplicar al perfil de ${esc(at.name)}</button></div>
+    res = `<div class="card"><div class="row sb"><h2 style="margin:0">Resultado del test</h2><button class="btn primary" id="applyTest" ${R.invalid ? 'disabled title="Test no válido: no se puede aplicar"' : ''}>Aplicar al perfil de ${esc(at.name)}</button></div>
       <div class="kpis" style="margin:12px 0"><div class="kpi" style="grid-column:1/-1"><div class="l">${esc(R.name)}</div><div class="v">${esc(R.headline)}</div><div class="s">${w}</div></div></div>
       <div class="tw"><table>${testRows(R)}</table></div>${steps}
       ${R.notes.map(n => `<div class="hint">${esc(n)}</div>`).join('')}
@@ -427,7 +427,7 @@ function bind() {
   document.querySelectorAll('[data-tact]').forEach(r => r.onclick = () => { state.tAct = r.dataset.tact; state.tTest = 'auto'; state.tStep = null; render(); window.scrollTo(0, 0); });
   document.querySelectorAll('[data-gotest]').forEach(l => l.onclick = e => { e.preventDefault(); state.tAct = l.dataset.gotest; state.tTest = 'auto'; state.tStep = null; setTab('tests'); });
   const ap = $('applyTest'); if (ap) ap.onclick = () => {
-    if (!lastTest) return; const at = state.athletes.find(x => x.id === lastTest.ath), v = lastTest.R.apply, clean = {}; for (const k in v) if (v[k] != null && isFinite(v[k])) clean[k] = v[k];
+    if (!lastTest || lastTest.R.invalid) return; const at = state.athletes.find(x => x.id === lastTest.ath), v = lastTest.R.apply, clean = {}; for (const k in v) if (v[k] != null && isFinite(v[k])) clean[k] = v[k];
     at.profile = Object.assign({}, at.profile, clean); saveAthletes(); analyzeAthlete(at.id); toast('Perfil de ' + at.name + ' actualizado con el resultado del test. Sesiones recalculadas.'); render();
   };
   const sa = $('selAct'); if (sa) sa.onchange = () => { state.sel = sa.value; render(); };
