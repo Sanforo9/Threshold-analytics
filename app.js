@@ -245,6 +245,12 @@ function viewActividad() {
     ${kp('SDNN', f0(H.whole.sdnn) + ' ms', '')}${kp('pNN50', f1(H.whole.pnn50) + ' %', '')}
     ${kp('DFA α1 mediano', isNum(H.alphaMedian) ? f2(H.alphaMedian) : '—', isNum(H.pctBelow075) ? f0(H.pctBelow075) + ' % del tiempo &lt; 0,75' : '')}</div>
     <canvas id="cHrv" style="height:200px"></canvas><div class="hint">DFA α1 en ventanas de 2 min (versión simplificada). Por debajo de 0,75 ≈ por encima del umbral aeróbico; por debajo de 0,5, esfuerzo muy alto. ${H.artifactPct > 0.5 ? 'Latidos descartados por artefactos: ' + f1(H.artifactPct) + ' %.' : ''}</div></div>` : '';
+  const S = A.struct;
+  const ivCard = S ? `<div class="card"><h2>Intervalos detectados</h2>
+    <div class="hint" style="margin:0 0 8px">${S.reps.length} esfuerzos · ${f0(S.workSec / 60)} min de trabajo (${f0(S.workPct)} % de la sesión) · nivel de esfuerzo ${C.fmtOut(S.hiLevel, act.sport, S.by)} vs ${C.fmtOut(S.loLevel, act.sport, S.by)} en recuperación. Las dos mitades de la sesión no se comparan porque dependen de dónde cayeron los intervalos.</div>
+    <div class="tw"><table><tr><th>#</th><th>Inicio</th><th>Duración</th><th>${S.by === 'pw' ? 'Potencia' : 'Ritmo/velocidad'}</th><th>FC media</th><th>FC final</th><th>Recuperación</th><th>Bajada FC</th></tr>
+    ${S.reps.map((r, i) => `<tr><td>${i + 1}</td><td>${C.fmtMin(r.start)}</td><td>${C.fmtMin(r.dur)}</td><td>${C.fmtOut(r.out, act.sport, S.by)}</td><td>${isNum(r.hr) ? f0(r.hr) : '—'}</td><td>${isNum(r.hrEnd) ? f0(r.hrEnd) : '—'}</td><td>${r.recDur ? C.fmtMin(r.recDur) + ' a ' + C.fmtOut(r.recOut, act.sport, S.by) : '—'}</td><td>${isNum(r.recDrop) ? f0(r.recDrop) + ' ppm' : '—'}</td></tr>`).join('')}</table></div>
+    <div class="hint">Primeras vs últimas repeticiones: ${S.by === 'pw' ? 'potencia' : 'velocidad'} ${S.fade >= 0 ? '+' : ''}${f1(S.fade)} %${isNum(S.hrDrift) ? ', FC ' + (S.hrDrift >= 0 ? '+' : '') + f0(S.hrDrift) + ' ppm' : ''}${isNum(S.efDrift) ? ', eficiencia ' + (S.efDrift > 0 ? '−' : '+') + f1(Math.abs(S.efDrift)) + ' % entre mitades de los esfuerzos' : ''}. La detección es automática: si tu entreno no era por intervalos, ignora esta tarjeta.</div></div>` : '';
   const hist = list.filter(a => a.start <= act.start);
   return `<div class="row sb"><div><h3>${SPORT_ICON[act.sport]} ${C.SPORTS[act.sport]} · ${esc(dateStr(act.start))}</h3><div class="muted">Deportista: <b>${esc(at.name)}</b> · ${esc(act.name)}</div></div>
     <div class="row"><select id="selAct" style="width:auto;max-width:320px">${opts}</select><select id="selSport" style="width:auto" title="Cambiar deporte">${sports}</select><button class="btn danger sm" id="delAct">Eliminar</button></div></div>
@@ -254,6 +260,7 @@ function viewActividad() {
     <div class="card"><h2>Frecuencia cardíaca y esfuerzo</h2><canvas id="cMain"></canvas></div>
     <div class="grid2"><div class="card"><h2>Tiempo en zonas de FC</h2>${zones}</div>${pzCard || `<div class="card"><h2>Acople cardíaco por mitades</h2>${dec}</div>`}</div>
     ${pzCard ? `<div class="card"><h2>Acople cardíaco por mitades</h2>${dec}</div>` : ''}
+    ${ivCard}
     ${hrvCard}
     <div class="card"><h2>Subir más sesiones</h2>${dropzone()}</div>`;
 }

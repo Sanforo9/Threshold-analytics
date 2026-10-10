@@ -287,6 +287,68 @@ function analyzeHrv(rrAll) {
   };
 }
 
+/* ---------- detección de intervalos ---------- */
+// Busca esfuerzos repetidos (potencia o velocidad alta vs. recuperación) separando la señal en dos niveles (Otsu).
+function detectIntervals(out, hr, n, sport, hasPw) {
+  const w = sport === 'run' ? 20 : 30, half = w >> 1, sm0 = movAvg(out, w, 0.5), sm = new Float32Array(n);
+  for (let i = 0; i < n; i++) sm[i] = sm0[Math.min(n - 1, i + half)]; // ventana centrada
+  const v = []; for (let i = 0; i < n; i++) if (isNum(sm[i])) v.push(sm[i]);
+  if (v.length < 1200) return null;
+  let lo = Infinity, hi = -Infinity; for (const x of v) { if (x < lo) lo = x; if (x > hi) hi = x; }
+  if (!(hi > lo)) return null;
+  const B = 64, hist = new Float64Array(B), tot = v.length;
+  for (const x of v) hist[Math.min(B - 1, Math.floor((x - lo) / (hi - lo) * B))]++;
+  let sumAll = 0; for (let b = 0; b < B; b++) sumAll += b * hist[b];
+  let wB = 0, sumB = 0, best = -1, bt = 0;
+  for (let b = 0; b < B - 1; b++) {
+    wB += hist[b]; if (!wB) continue; const wF = tot - wB; if (!wF) break; sumB += b * hist[b];
+    const mB = sumB / wB, mF = (sumAll - sumB) / wF, bv = wB * wF * (mB - mF) ** 2; if (bv > best) { best = bv; bt = b; }
+  }
+  const thr = lo + (bt + 1) / B * (hi - lo);
+  let sH = 0, nH = 0, sL = 0, nL = 0; for (const x of v) { if (x >= thr) { sH += x; nH++; } else { sL += x; nL++; } }
+  if (!nH || !nL) return null;
+  const mH = sH / nH, mL = sL / nL, m = (sH + sL) / tot, frac = nH / tot;
+  if ((mH - mL) / m < (hasPw ? 0.3 : 0.4) || frac < 0.08 || frac > 0.75) return null;
+  const runs = []; let st = -1;
+  for (let i = 0; i <= n; i++) {
+    const up = i < n && isNum(sm[i]) && sm[i] >= thr;
+    if (up && st < 0) st = i; else if (!up && st >= 0) { runs.push([st, i - 1]); st = -1; }
+  }
+  const merged = []; for (const r of runs) { const l = merged[merged.length - 1]; if (l && r[0] - l[1] < 20) l[1] = r[1]; else merged.push(r.slice()); }
+  const minRep = sport === 'run' ? 40 : 60, rr = merged.filter(r => r[1] - r[0] + 1 >= minRep);
+  if (rr.length < 3) return null;
+  const reps = rr.map(([a, b], k) => {
+    const ids = []; for (let i = a; i <= b; i++) if (isNum(out[i])) ids.push(i);
+    const mid = a + ((b - a) >> 1), hs = []; for (let i = mid; i <= b; i++) if (isNum(hr[i])) hs.push(hr[i]);
+    const he = []; for (let i = Math.max(a, b - 9); i <= b; i++) if (isNum(hr[i])) he.push(hr[i]);
+    const o = { start: a, dur: b - a + 1, out: mean(ids.map(i => out[i])), hr: mean(hs), hrEnd: mean(he) };
+    const nx = k + 1 < rr.length ? rr[k + 1][0] : null;
+    if (nx != null && nx - b - 1 >= 15) {
+      const g = []; let mn = Infinity; for (let i = b + 1; i < nx; i++) { if (isNum(out[i])) g.push(out[i]); if (isNum(hr[i]) && hr[i] < mn) mn = hr[i]; }
+      o.recDur = nx - b - 1; o.recOut = mean(g); o.recDrop = isFinite(mn) && isNum(o.hrEnd) ? o.hrEnd - mn : NaN;
+    }
+    return o;
+  });
+  const k = Math.max(1, Math.min(2, reps.length >> 1)), part = (a) => ({ out: mean(a.map(r => r.out)), hr: mean(a.map(r => r.hr)) });
+  const f = part(reps.slice(0, k)), l = part(reps.slice(-k));
+  const h2 = reps.length >> 1, p1 = part(reps.slice(0, h2)), p2 = part(reps.slice(h2));
+  const efOf = p => p.out / p.hr, workSec = reps.reduce((x, r) => x + r.dur, 0);
+  return {
+    reps, thr, hiLevel: mH, loLevel: mL, workSec, workPct: workSec / n * 100,
+    fade: (l.out - f.out) / f.out * 100, hrDrift: l.hr - f.hr, k,
+    efDrift: isNum(efOf(p1)) && isNum(efOf(p2)) ? (efOf(p1) - efOf(p2)) / efOf(p1) * 100 : NaN,
+    cvOut: sd(reps.map(r => r.out)) / mean(reps.map(r => r.out)),
+    recDrop: mean(reps.map(r => r.recDrop)), medDur: median(reps.map(r => r.dur)), by: hasPw ? 'pw' : 'sp'
+  };
+}
+function fmtOut(v, sport, by) {
+  if (!isNum(v)) return '—';
+  if (by === 'pw') return f0(v) + ' W';
+  if (sport === 'run' && v > 0) { const sec = Math.round(1000 / v); return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0') + ' /km'; }
+  return f1(v * 3.6) + ' km/h';
+}
+function fmtMin(sec) { const m = Math.floor(sec / 60), s = Math.round(sec % 60); return s === 60 ? (m + 1) + ':00' : m + ':' + String(s).padStart(2, '0'); }
+
 /* ---------- análisis de una actividad ---------- */
 function normalizedPower(pw) {
   const r = movAvg(pw, 30, 0.5); let s = 0, c = 0;
@@ -382,6 +444,11 @@ function analyze(rs, sport, rrAll, profileIn) {
       const h = idx.length >> 1, v1 = mean(idx.slice(0, h).map(i => s.sp[i])), v2 = mean(idx.slice(h).map(i => s.sp[i]));
       A.split = { v1, v2, pct: (v2 - v1) / v1 * 100 };
     }
+  }
+  // estructura por intervalos (esfuerzos repetidos): condiciona cómo se leen mitades y acople
+  if (sport !== 'swim' && (A.hasPw || A.hasSp)) {
+    A.struct = detectIntervals(A.hasPw ? s.pw : s.sp, s.hr, n, sport, A.hasPw);
+    if (A.struct && A.decoupling && A.decoupling.valid) A.decoupling.steady = false;
   }
   // recuperación cardíaca intra-sesión (mayor caída en 60 s tras esfuerzo)
   if (A.hasHr && A.maxHr > 0) {
@@ -544,7 +611,15 @@ function activityInsights(act, history) {
     add(lvl, 'Recuperación cardíaca', 'Tras un esfuerzo a ' + f0(A.hrr.from) + ' ppm, la FC bajó ' + f0(d) + ' ppm en 60 s. ' + (d >= 25 ? 'Recuperación rápida (buena señal parasimpática).' : d >= 15 ? 'Recuperación normal.' : 'Recuperación lenta: puede asociarse a fatiga, estrés acumulado o a un esfuerzo todavía muy exigente (también influye la postura y si se siguió moviendo).'));
   } else if (A.hasHr) add('info', 'Recuperación cardíaca', 'No se detectó un esfuerzo seguido de parada o bajada clara de ritmo, así que no se puede medir la caída de FC en 60 s.');
   // Ritmo
-  if (A.split && act.sport !== 'swim') {
+  if (A.struct) {
+    const S = A.struct, u = x => fmtOut(x, act.sport, S.by), n = S.reps.length;
+    let t = 'Se detectaron ' + n + ' esfuerzos de unos ' + fmtMin(S.medDur) + ' min (' + f0(S.workSec / 60) + ' min en total, ' + f0(S.workPct) + ' % de la sesión) a ' + u(S.hiLevel) + ' de media, frente a ' + u(S.loLevel) + ' en el resto. ';
+    t += 'Por eso no se comparan las dos mitades de la sesión: la diferencia dependería de dónde cayeron los intervalos y no de un mal reparto. ';
+    t += 'Entre las primeras y las últimas repeticiones la ' + (S.by === 'pw' ? 'potencia' : 'velocidad') + ' cambió ' + (S.fade >= 0 ? '+' : '') + f1(S.fade) + ' %' + (isNum(S.hrDrift) ? ' y la FC ' + (S.hrDrift >= 0 ? '+' : '') + f0(S.hrDrift) + ' ppm' : '') + ': ';
+    t += S.fade < -5 ? 'hubo caída de rendimiento en las últimas repeticiones (fatiga o salida demasiado fuerte).' : (isNum(S.efDrift) && S.efDrift > 5 ? 'se mantuvo el nivel pero con más coste cardíaco (fatiga acumulada).' : 'rendimiento consistente entre repeticiones.');
+    if (isNum(S.recDrop)) t += ' Entre repeticiones la FC bajó de media ' + f0(S.recDrop) + ' ppm.';
+    add(S.fade < -5 ? 'warn' : 'info', 'Sesión por intervalos', t);
+  } else if (A.split && act.sport !== 'swim') {
     const p = A.split.pct;
     add(Math.abs(p) > 8 ? 'warn' : 'info', 'Reparto del esfuerzo', 'Velocidad de la 2ª mitad ' + (p >= 0 ? '+' : '') + f1(p) + ' % respecto a la 1ª. ' + (p < -8 ? 'Caída marcada: salida demasiado fuerte o fatiga en la segunda parte.' : p > 8 ? 'Acelerada notable (split negativo).' : 'Reparto parejo.'));
   }
@@ -647,7 +722,7 @@ function activityOverview(act, history) {
   const D = A.decoupling, decOk = !!(D && D.valid && D.steady);
   const variable = !!((D && D.valid && !D.steady) || (act.sport === 'bike' && isNum(A.vi) && A.vi > 1.15));
   let kind = 'sesión';
-  if (isNum(A.IF)) kind = variable ? 'sesión variable o interválica' : A.IF < 0.75 ? 'sesión aeróbica suave' : A.IF < 0.85 ? 'sesión de resistencia sostenida' : A.IF < 0.95 ? 'sesión cercana al umbral' : 'sesión muy intensa';
+  if (isNum(A.IF)) kind = A.struct ? 'sesión por intervalos (' + A.struct.reps.length + ' esfuerzos)' : variable ? 'sesión variable o interválica' : A.IF < 0.75 ? 'sesión aeróbica suave' : A.IF < 0.85 ? 'sesión de resistencia sostenida' : A.IF < 0.95 ? 'sesión cercana al umbral' : 'sesión muy intensa';
   let band = null;
   if (isNum(A.load)) {
     band = loadBand(A.load)[0];
@@ -673,7 +748,11 @@ function activityOverview(act, history) {
     pts.push({ label: 'Eficiencia', level: l, text: (et.d >= 0 ? '+' : '') + f1(et.d) + ' % frente a las últimas ' + et.n + ' sesiones de ' + (SPORTS[act.sport] || '').toLowerCase() + (et.d < -5 ? ' (por debajo de lo habitual).' : et.d > 3 ? ' (mejor que lo habitual).' : ' (sin cambios).') });
     if (et.d < -5) clauses.push('eficiencia por debajo de la media reciente');
   }
-  if (A.split && act.sport !== 'swim' && Math.abs(A.split.pct) > 8) {
+  if (A.struct) {
+    const S = A.struct, l = S.fade < -5 ? 'warn' : 'info'; mark(l);
+    pts.push({ label: 'Intervalos', level: l, text: S.reps.length + ' esfuerzos (' + f0(S.workSec / 60) + ' min): ' + (S.fade < -5 ? 'cayó el rendimiento ' + f1(-S.fade) + ' % hacia el final.' : 'rendimiento consistente entre repeticiones.') + ' Las mitades no se comparan.' });
+    if (S.fade < -5) clauses.push('caída de rendimiento en las últimas repeticiones');
+  } else if (A.split && act.sport !== 'swim' && Math.abs(A.split.pct) > 8) {
     mark('warn'); pts.push({ label: 'Reparto', level: 'warn', text: 'La 2ª mitad fue ' + (A.split.pct >= 0 ? '+' : '') + f1(A.split.pct) + ' % en velocidad respecto a la 1ª: ' + (A.split.pct < 0 ? 'salida demasiado fuerte o fatiga.' : 'acelerada notable.') });
   }
   if (A.hrv) pts.push({ label: 'Variabilidad cardíaca', level: 'info', text: 'RMSSD ' + f0(A.hrv.whole.rmssd) + ' ms' + (isNum(A.hrv.alphaMedian) ? ', DFA α1 mediano ' + f2(A.hrv.alphaMedian) : '') + ' (dependen de la intensidad; no equivalen a la VFC en reposo).' });
@@ -728,7 +807,7 @@ function weekOverview(W) {
   return { level, headline, points: pts, advice, caveat: cav.join(' ') };
 }
 
-const Core = { activityOverview, weekOverview, observedMaxHr, SPORTS, ZN, ZLIM, PZN, PZLIM, FIT_EPOCH, normProfile, parseFit, parseXml, resample, analyze, analyzeHrv, dfaAlpha1, cleanRR, hrvTime, downsample,
+const Core = { detectIntervals, fmtOut, fmtMin, activityOverview, weekOverview, observedMaxHr, SPORTS, ZN, ZLIM, PZN, PZLIM, FIT_EPOCH, normProfile, parseFit, parseXml, resample, analyze, analyzeHrv, dfaAlpha1, cleanRR, hrvTime, downsample,
   pmc, weekSummary, f0, f1, f2, activityInsights, weekInsights, dailyLoads, dayKey, keyToDate, weekStartKey, addDays, daysBetween, isNum, mean, sd, median, movAvg, normalizedPower, guessSport };
 if (typeof module !== 'undefined' && module.exports) module.exports = Core; else root.Core = Core;
 })(typeof window !== 'undefined' ? window : globalThis);
