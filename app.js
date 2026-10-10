@@ -1,7 +1,7 @@
 (() => {
 'use strict';
 const C = Core, $ = id => document.getElementById(id), isNum = C.isNum;
-const state = { acts: [], athletes: [], cur: null, tab: 'actividad', sel: null, wk: null, db: null, persist: true, pending: null };
+const state = { acts: [], athletes: [], cur: null, tab: 'actividad', sel: null, wk: null, db: null, persist: true, pending: null, tAct: null, tTest: 'auto', tStep: null };
 const SPORT_ICON = { run: '🏃', bike: '🚴', swim: '🏊', other: '🏋️' };
 const ZCOL = ['var(--z1)', 'var(--z2)', 'var(--z3)', 'var(--z4)', 'var(--z5)'];
 const PZCOL = ['var(--z1)', 'var(--z2)', 'var(--z3)', 'var(--z4)', 'var(--z5)', '#c026d3', '#7c3aed'];
@@ -141,6 +141,7 @@ async function confirmImport() {
   if (fresh.length) {
     const last = fresh.slice().sort((a, b) => b.start - a.start)[0];
     state.sel = last.id; state.wk = C.weekStartKey(last.start); state.tab = fresh.length === 1 ? 'actividad' : 'semana';
+    if (fresh.length === 1) { const td = testsOf(last); if (td.length && td[0].score >= 0.7) { state.tAct = last.id; state.tTest = 'auto'; state.tStep = null; state.tab = 'tests'; } }
   } else selectLatest();
   render();
 }
@@ -227,12 +228,12 @@ function viewActividad() {
   const hrB = C.ZLIM.map(x => Math.round(x * A.profile.lthr));
   const hrRanges = [`&lt;${hrB[0]} ppm`, `${hrB[0]}-${hrB[1] - 1} ppm`, `${hrB[1]}-${hrB[2] - 1} ppm`, `${hrB[2]}-${hrB[3] - 1} ppm`, `≥${hrB[3]} ppm`];
   const zones = A.zones ? zoneRows(A.zones, C.ZN.map((n, i) => `${n} <small class="muted">${hrRanges[i]}</small>`), ZCOL, hrRanges) +
-      `<div class="hint">Zonas Coggan según FC umbral ${A.profile.lthr} ppm${A.profile.lthrAuto ? ' (estimada)' : ''}: Z1 &lt;69 %, Z2 69-83 %, Z3 84-94 %, Z4 95-105 %, Z5 ≥106 %. Si usas otros límites en tu plataforma, cambia la FC umbral en Perfil para que coincidan.</div>`
+      `<div class="hint">Zonas de la Calculadora de Test según FC umbral ${A.profile.lthr} ppm${A.profile.lthrAuto ? ' (estimada)' : ''}: Z1 &lt;69 %, Z2 69-83 %, Z3 84-94 %, Z4 95-105 %, Z5 &gt;105 %. Si usas otros límites en tu plataforma, cambia la FC umbral en Perfil para que coincidan.</div>`
     : '<div class="empty">Sin frecuencia cardíaca en este archivo.</div>';
   const pB = C.PZLIM.map(x => Math.round(x * (A.profile.ftp || 0)));
   const pRanges = [`&lt;${pB[0]} W`, `${pB[0]}-${pB[1] - 1} W`, `${pB[1]}-${pB[2] - 1} W`, `${pB[2]}-${pB[3] - 1} W`, `${pB[3]}-${pB[4] - 1} W`, `${pB[4]}-${pB[5] - 1} W`, `≥${pB[5]} W`];
   const pzCard = A.pzones ? `<div class="card"><h2>Tiempo en zonas de potencia</h2>${zoneRows(A.pzones, C.PZN.map((n, i) => `${n} <small class="muted">${pRanges[i]}</small>`), PZCOL, pRanges)}
-    <div class="hint">Zonas Coggan según FTP ${A.profile.ftp} W: Z1 &lt;56 %, Z2 56-75 %, Z3 76-90 %, Z4 91-105 %, Z5 106-120 %, Z6 121-150 %, Z7 &gt;150 %. Incluye los ceros (paradas) en Z1.</div></div>` : '';
+    <div class="hint">Zonas de la Calculadora de Test según FTP ${A.profile.ftp} W: Z1 &lt;55 %, Z2 55-75 %, Z3 75-90 %, Z4 90-105 %, Z5 105-120 %, Z6 120-150 %, Z7 &gt;150 %. Incluye los ceros (paradas) en Z1.</div></div>` : '';
   const D = A.decoupling;
   const dec = D && D.valid ? `<table><tr><th></th><th>1ª mitad</th><th>2ª mitad</th><th>Cambio</th></tr>
     <tr><td>FC media</td><td>${f0(D.e1.hr)} ppm</td><td>${f0(D.e2.hr)} ppm</td><td>${D.e2.hr - D.e1.hr >= 0 ? '+' : ''}${f1(D.e2.hr - D.e1.hr)}</td></tr>
@@ -245,6 +246,7 @@ function viewActividad() {
     ${kp('SDNN', f0(H.whole.sdnn) + ' ms', '')}${kp('pNN50', f1(H.whole.pnn50) + ' %', '')}
     ${kp('DFA α1 mediano', isNum(H.alphaMedian) ? f2(H.alphaMedian) : '—', isNum(H.pctBelow075) ? f0(H.pctBelow075) + ' % del tiempo &lt; 0,75' : '')}</div>
     <canvas id="cHrv" style="height:200px"></canvas><div class="hint">DFA α1 en ventanas de 2 min (versión simplificada). Por debajo de 0,75 ≈ por encima del umbral aeróbico; por debajo de 0,5, esfuerzo muy alto. ${H.artifactPct > 0.5 ? 'Latidos descartados por artefactos: ' + f1(H.artifactPct) + ' %.' : ''}</div></div>` : '';
+  const tdet = testsOf(act), tBanner = tdet.length && tdet[0].score >= 0.7 ? (() => { const r = TestLab.compute(tdet[0].id, act.rs, profileOf(at.id), {}); return `<div class="ins ok"><span class="tag">Test</span><b>Esta sesión parece un ${esc(TestLab.TESTS[tdet[0].id].name.toLowerCase())}</b>${r && !r.error ? esc(r.headline) + '. ' : ''}<a href="#" data-gotest="${act.id}">Ver el análisis del test y las zonas →</a></div>`; })() : '';
   const S = A.struct;
   const ivCard = S ? `<div class="card"><h2>Intervalos detectados</h2>
     <div class="hint" style="margin:0 0 8px">${S.reps.length} esfuerzos · ${f0(S.workSec / 60)} min de trabajo (${f0(S.workPct)} % de la sesión) · nivel de esfuerzo ${C.fmtOut(S.hiLevel, act.sport, S.by)} vs ${C.fmtOut(S.loLevel, act.sport, S.by)} en recuperación. Las dos mitades de la sesión no se comparan porque dependen de dónde cayeron los intervalos.</div>
@@ -254,6 +256,7 @@ function viewActividad() {
   const hist = list.filter(a => a.start <= act.start);
   return `<div class="row sb"><div><h3>${SPORT_ICON[act.sport]} ${C.SPORTS[act.sport]} · ${esc(dateStr(act.start))}</h3><div class="muted">Deportista: <b>${esc(at.name)}</b> · ${esc(act.name)}</div></div>
     <div class="row"><select id="selAct" style="width:auto;max-width:320px">${opts}</select><select id="selSport" style="width:auto" title="Cambiar deporte">${sports}</select><button class="btn danger sm" id="delAct">Eliminar</button></div></div>
+    ${tBanner}
     ${(() => { const S = C.activityOverview(act, hist); lastSummary = summaryText(S, at.name + ' · ' + C.SPORTS[act.sport] + ' ' + new Date(act.start).toLocaleDateString('es')); return summaryHtml(S); })()}
     <div class="kpis">${kpis}</div>
     <div class="card"><h2>Conclusiones de la sesión</h2>${insHtml(C.activityInsights(act, hist))}${completeBtn([act])}${GLOSSARY}</div>
@@ -303,6 +306,57 @@ function viewHistorial() {
   return `<div class="card"><div class="row sb" style="margin-bottom:10px"><h2 style="margin:0">Historial de ${esc(at.name)} (${list.length})</h2><div class="row"><button class="btn sm" id="expCsv">Exportar CSV</button></div></div>
     <div class="tw"><table><tr><th>Fecha</th><th>Deporte</th><th>Tiempo</th><th>Km</th><th>FC</th><th>Carga</th><th>Int.</th><th>Acople</th><th>R-R</th><th>Archivo</th></tr>${rows}</table></div>
     <div class="hint">Las sesiones se guardan solo en este navegador/dispositivo. Usa <b>Limpiar</b> para empezar de nuevo.</div></div>${dropzone()}`;
+}
+
+/* ---------- tests de campo ---------- */
+let lastTest = null;
+function testsOf(act) {
+  if (!act.A) return [];
+  if (!act._tc || act._tc.A !== act.A) { let list = []; try { list = TestLab.detect(act.rs, act.sport, act.A); } catch (e) { } act._tc = { A: act.A, list }; }
+  return act._tc.list;
+}
+function testRows(R) { return R.calc.map(r => `<tr><td>${esc(r[0])}</td><td><b>${esc(r[1])}</b></td></tr>`).join(''); }
+function zoneTable(z) { return `<div class="card"><h2>${esc(z.title)}</h2><div class="tw"><table><tr>${z.head.map(h => `<th>${esc(h)}</th>`).join('')}</tr>${z.rows.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</table></div></div>`; }
+function viewTests() {
+  const at = curAth(), list = mine();
+  if (!at) return noAthlete();
+  if (!list.length) return `<div class="card"><h3>Tests de campo</h3><p class="muted">Sube el archivo de la sesión de un test (20 min, 2×8, escalonado, running 12 o 20 min, natación…) y la app te dirá de qué test se trata, calculará el umbral y las zonas.</p></div>` + dropzone();
+  const found = list.filter(a => { const t = testsOf(a); return t.length && t[0].score >= 0.6; });
+  let act = list.find(a => a.id === state.tAct);
+  if (!act) act = found.length ? found[found.length - 1] : (list.find(a => a.id === state.sel) || list[list.length - 1]);
+  state.tAct = act.id;
+  const det = testsOf(act), TL = TestLab.TESTS;
+  const ids = Object.keys(TL).filter(k => act.sport === 'other' || TL[k].sport === act.sport);
+  let testId = state.tTest !== 'auto' && TL[state.tTest] ? state.tTest : (det[0] ? det[0].id : null);
+  const R = testId ? TestLab.compute(testId, act.rs, profileOf(at.id), { stepIdx: state.tStep }) : null;
+  lastTest = R && !R.error ? { R, ath: at.id } : null;
+  const actOpts = list.slice().reverse().map(a => { const t = testsOf(a), isT = t.length && t[0].score >= 0.6; return `<option value="${a.id}" ${a.id === act.id ? 'selected' : ''}>${isT ? '🎯 ' : ''}${SPORT_ICON[a.sport]} ${esc(new Date(a.start).toLocaleDateString('es', { day: 'numeric', month: 'short' }))} · ${fmtDur(a.A.dur)} · ${esc(a.name)}</option>`; }).join('');
+  const testOpts = `<option value="auto" ${state.tTest === 'auto' ? 'selected' : ''}>Detectar automáticamente</option>` + ids.map(k => `<option value="${k}" ${state.tTest === k ? 'selected' : ''}>${esc(TL[k].name)}</option>`).join('');
+  let detTxt;
+  if (state.tTest !== 'auto' && TL[state.tTest]) detTxt = `<div class="ins info"><span class="tag">Manual</span><b>Analizando como: ${esc(TL[state.tTest].name)}</b>Elegiste el tipo de test a mano. El cálculo busca el mejor tramo de esa duración en la sesión.</div>`;
+  else if (det.length) {
+    const d = det[0], alt = det.slice(1).map(x => `${esc(TL[x.id].name)} (${f0(x.score * 100)} %)`).join(' · ');
+    detTxt = `<div class="ins ${d.score >= 0.7 ? 'ok' : 'warn'}"><span class="tag">${d.score >= 0.7 ? 'Detectado' : 'Posible'}</span><b>${esc(TL[d.id].name)} · confianza ${f0(d.score * 100)} %</b>${esc(d.why)}${alt ? `<div class="hint">Otras opciones: ${alt}. Puedes cambiarlo arriba.</div>` : ''}${d.score < 0.7 ? '<div class="hint">La coincidencia no es clara: confirma que el tipo de test sea el correcto.</div>' : ''}</div>`;
+  } else detTxt = `<div class="ins warn"><span class="tag">Sin test</span><b>Esta sesión no parece un test</b>No se encontró un esfuerzo con la forma de ninguno de los tests (por ejemplo, un bloque continuo y parejo de 12 o 20 min bien por encima del resto de la sesión). Si sí era un test, elige el tipo manualmente.</div>`;
+  let res = '';
+  if (R && R.error) res = `<div class="card"><h2>Resultado</h2><div class="empty">${esc(R.error)}</div></div>`;
+  else if (R) {
+    const w = R.win ? `Tramo usado: ${fmtDur(R.win.s)} – ${fmtDur(R.win.e)} de la sesión.` : '';
+    const steps = R.steps && R.steps.length ? `<h3 style="margin:14px 0 6px;font-size:14px">Escalones detectados</h3><div class="tw"><table><tr><th>Umbral</th><th>#</th><th>Duración</th><th>Potencia</th><th>FC (2ª mitad)</th></tr>${R.steps.map((p, i) => `<tr><td><input type="radio" name="tstep" value="${i}" ${state.tStep === i ? 'checked' : ''} style="width:auto"></td><td>${p.n}</td><td>${fmtDur(p.dur)}</td><td>${f0(p.pw)} W</td><td>${isNum(p.hr) ? f0(p.hr) + ' ppm' : '—'}</td></tr>`).join('')}</table></div>` : '';
+    const ap = R.apply, bits = [ap.ftp ? 'FTP ' + ap.ftp + ' W' : '', ap.lthr ? 'FC umbral ' + ap.lthr + ' ppm' : '', ap.runThr ? 'umbral de carrera ' + TestLab.fmtPace(ap.runThr) + ' /km' : '', ap.runFtp ? 'FTP de carrera ' + ap.runFtp + ' W' : '', ap.swimThr ? 'umbral de natación ' + TestLab.fmtPace(ap.swimThr) + ' /100 m' : ''].filter(Boolean);
+    res = `<div class="card"><div class="row sb"><h2 style="margin:0">Resultado del test</h2><button class="btn primary" id="applyTest">Aplicar al perfil de ${esc(at.name)}</button></div>
+      <div class="kpis" style="margin:12px 0"><div class="kpi" style="grid-column:1/-1"><div class="l">${esc(R.name)}</div><div class="v">${esc(R.headline)}</div><div class="s">${w}</div></div></div>
+      <div class="tw"><table>${testRows(R)}</table></div>${steps}
+      ${R.notes.map(n => `<div class="hint">${esc(n)}</div>`).join('')}
+      <div class="hint">«Aplicar» guarda en el perfil: ${esc(bits.join(' · ') || '—')}, y recalcula las zonas y la carga de sus sesiones.</div></div>
+      <div class="grid2">${R.zones.map(zoneTable).join('')}</div>`;
+  }
+  // historial de tests detectados
+  const hist = found.slice().reverse().map(a => { const d = testsOf(a)[0], r = TestLab.compute(d.id, a.rs, profileOf(at.id), {}); return `<tr class="click" data-tact="${a.id}"><td>${esc(new Date(a.start).toLocaleDateString('es'))}</td><td>${esc(TL[d.id].name)}</td><td>${r && !r.error ? esc(r.headline) : '—'}</td><td class="muted">${esc(a.name)}</td></tr>`; }).join('');
+  return `<div class="card"><h2>Analizar un test</h2><div class="row"><div style="flex:1;min-width:220px"><label>Sesión</label><select id="tAct">${actOpts}</select></div><div style="flex:1;min-width:220px"><label>Tipo de test</label><select id="tTest">${testOpts}</select></div></div>
+    <div style="margin-top:10px">${detTxt}</div></div>${res}
+    ${hist ? `<div class="card"><h2>Tests detectados de ${esc(at.name)}</h2><div class="tw"><table><tr><th>Fecha</th><th>Test</th><th>Resultado</th><th>Archivo</th></tr>${hist}</table></div></div>` : ''}
+    <div class="card"><h2>Subir más sesiones</h2>${dropzone()}</div>`;
 }
 
 function viewPerfil() {
@@ -357,7 +411,7 @@ function renderHeader() {
 }
 function render() {
   renderHeader();
-  const v = { actividad: viewActividad, semana: viewSemana, historial: viewHistorial, perfil: viewPerfil }[state.tab];
+  const v = { actividad: viewActividad, semana: viewSemana, historial: viewHistorial, tests: viewTests, perfil: viewPerfil }[state.tab];
   $('main').innerHTML = v();
   bind(); requestAnimationFrame(drawCharts);
 }
@@ -367,6 +421,15 @@ function bind() {
   document.querySelectorAll('[data-open]').forEach(r => r.onclick = () => { state.sel = r.dataset.open; setTab('actividad'); });
   document.querySelectorAll('[data-ath]').forEach(r => r.onclick = () => { state.cur = r.dataset.ath; saveAthletes(); selectLatest(); render(); });
   const cs = $('copySum'); if (cs) cs.onclick = async () => { try { await navigator.clipboard.writeText(lastSummary); toast('Conclusión copiada.'); } catch (e) { toast('No se pudo copiar automáticamente.'); } };
+  const ta = $('tAct'); if (ta) ta.onchange = () => { state.tAct = ta.value; state.tTest = 'auto'; state.tStep = null; render(); };
+  const tt = $('tTest'); if (tt) tt.onchange = () => { state.tTest = tt.value; state.tStep = null; render(); };
+  document.querySelectorAll('input[name=tstep]').forEach(r => r.onchange = () => { state.tStep = +r.value; render(); });
+  document.querySelectorAll('[data-tact]').forEach(r => r.onclick = () => { state.tAct = r.dataset.tact; state.tTest = 'auto'; state.tStep = null; render(); window.scrollTo(0, 0); });
+  document.querySelectorAll('[data-gotest]').forEach(l => l.onclick = e => { e.preventDefault(); state.tAct = l.dataset.gotest; state.tTest = 'auto'; state.tStep = null; setTab('tests'); });
+  const ap = $('applyTest'); if (ap) ap.onclick = () => {
+    if (!lastTest) return; const at = state.athletes.find(x => x.id === lastTest.ath), v = lastTest.R.apply, clean = {}; for (const k in v) if (v[k] != null && isFinite(v[k])) clean[k] = v[k];
+    at.profile = Object.assign({}, at.profile, clean); saveAthletes(); analyzeAthlete(at.id); toast('Perfil de ' + at.name + ' actualizado con el resultado del test. Sesiones recalculadas.'); render();
+  };
   const sa = $('selAct'); if (sa) sa.onchange = () => { state.sel = sa.value; render(); };
   const ss = $('selSport'); if (ss) ss.onchange = async () => { const a = state.acts.find(x => x.id === state.sel); a.sport = ss.value; analyzeAthlete(a.ath); await persist(a); render(); };
   const da = $('delAct'); if (da) da.onclick = async () => { if (!confirm('¿Eliminar esta sesión?')) return; await removeActs([state.sel]); selectLatest(); render(); };
@@ -378,7 +441,7 @@ function bind() {
     const at = curAth(), p = { hrMax: num('m_hrMax'), hrRest: num('m_hrRest'), lthr: num('m_lthr'), ftp: num('m_ftp'), sex: $('m_sex').value };
     const name = $('p_name').value.trim(); if (!name) { toast('El deportista necesita un nombre.'); return; }
     const err = checkProfile(p); if (err) { toast(err); return; }
-    at.name = name; at.profile = p; saveAthletes(); analyzeAthlete(at.id); toast('Datos guardados. Sesiones recalculadas.'); render();
+    at.name = name; at.profile = Object.assign({}, at.profile, p); saveAthletes(); analyzeAthlete(at.id); toast('Datos guardados. Sesiones recalculadas.'); render();
   };
   const ex = $('expCsv'); if (ex) ex.onclick = () => {
     const q = v => '"' + String(v).replace(/"/g, '""') + '"', at = curAth();
