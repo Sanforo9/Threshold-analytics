@@ -247,6 +247,7 @@ function viewActividad() {
     ${kp('DFA α1 mediano', isNum(H.alphaMedian) ? f2(H.alphaMedian) : '—', isNum(H.pctBelow075) ? f0(H.pctBelow075) + ' % del tiempo &lt; 0,75' : '')}</div>
     <canvas id="cHrv" style="height:200px"></canvas><div class="hint">DFA α1 en ventanas de 2 min (versión simplificada). Por debajo de 0,75 ≈ por encima del umbral aeróbico; por debajo de 0,5, esfuerzo muy alto. ${H.artifactPct > 0.5 ? 'Latidos descartados por artefactos: ' + f1(H.artifactPct) + ' %.' : ''}</div></div>` : '';
   const tdet = testsOf(act), tBanner = tdet.length && tdet[0].score >= 0.7 ? (() => { const r = TestLab.compute(tdet[0].id, act.rs, profileOf(at.id), {}); return `<div class="ins ok"><span class="tag">Test</span><b>Esta sesión parece un ${esc(TestLab.TESTS[tdet[0].id].name.toLowerCase())}</b>${r && !r.error ? esc(r.headline) + '. ' : ''}<a href="#" data-gotest="${act.id}">Ver el análisis del test y las zonas →</a></div>`; })() : '';
+  const fev = TestLab.sessionFtpEvidence(act, A.profile && A.profile.ftp), fBanner = fev ? `<div class="ins ${fev.level === 'alta' ? 'bad' : 'warn'}"><span class="tag">${fev.level === 'alta' ? 'Señal fuerte' : 'Señal moderada'}</span><b>El FTP podría estar desactualizado</b>${esc(fev.text)} <a href="#" data-go="tests">Ver si toca repetir el test →</a></div>` : '';
   const S = A.struct;
   const ivCard = S ? `<div class="card"><h2>Intervalos detectados</h2>
     <div class="hint" style="margin:0 0 8px">${S.reps.length} esfuerzos · ${f0(S.workSec / 60)} min de trabajo (${f0(S.workPct)} % de la sesión) · nivel de esfuerzo ${C.fmtOut(S.hiLevel, act.sport, S.by)} vs ${C.fmtOut(S.loLevel, act.sport, S.by)} en recuperación. Las dos mitades de la sesión no se comparan porque dependen de dónde cayeron los intervalos.</div>
@@ -256,7 +257,7 @@ function viewActividad() {
   const hist = list.filter(a => a.start <= act.start);
   return `<div class="row sb"><div><h3>${SPORT_ICON[act.sport]} ${C.SPORTS[act.sport]} · ${esc(dateStr(act.start))}</h3><div class="muted">Deportista: <b>${esc(at.name)}</b> · ${esc(act.name)}</div></div>
     <div class="row"><select id="selAct" style="width:auto;max-width:320px">${opts}</select><select id="selSport" style="width:auto" title="Cambiar deporte">${sports}</select><button class="btn danger sm" id="delAct">Eliminar</button></div></div>
-    ${tBanner}
+    ${tBanner}${fBanner}
     ${(() => { const S = C.activityOverview(act, hist); lastSummary = summaryText(S, at.name + ' · ' + C.SPORTS[act.sport] + ' ' + new Date(act.start).toLocaleDateString('es')); return summaryHtml(S); })()}
     <div class="kpis">${kpis}</div>
     <div class="card"><h2>Conclusiones de la sesión</h2>${insHtml(C.activityInsights(act, hist))}${completeBtn([act])}${GLOSSARY}</div>
@@ -329,7 +330,7 @@ function viewTests() {
   const ids = Object.keys(TL).filter(k => act.sport === 'other' || TL[k].sport === act.sport);
   let testId = state.tTest !== 'auto' && TL[state.tTest] ? state.tTest : (det[0] ? det[0].id : null);
   const R = testId ? TestLab.compute(testId, act.rs, profileOf(at.id), { stepIdx: state.tStep }) : null;
-  lastTest = R && !R.error ? { R, ath: at.id } : null;
+  lastTest = R && !R.error ? { R, ath: at.id, start: act.start } : null;
   const actOpts = list.slice().reverse().map(a => { const t = testsOf(a), isT = t.length && t[0].score >= 0.6; return `<option value="${a.id}" ${a.id === act.id ? 'selected' : ''}>${isT ? '🎯 ' : ''}${SPORT_ICON[a.sport]} ${esc(new Date(a.start).toLocaleDateString('es', { day: 'numeric', month: 'short' }))} · ${fmtDur(a.A.dur)} · ${esc(a.name)}</option>`; }).join('');
   const testOpts = `<option value="auto" ${state.tTest === 'auto' ? 'selected' : ''}>Detectar automáticamente</option>` + ids.map(k => `<option value="${k}" ${state.tTest === k ? 'selected' : ''}>${esc(TL[k].name)}</option>`).join('');
   let detTxt;
@@ -353,7 +354,12 @@ function viewTests() {
   }
   // historial de tests detectados
   const hist = found.slice().reverse().map(a => { const d = testsOf(a)[0], r = TestLab.compute(d.id, a.rs, profileOf(at.id), {}); return `<tr class="click" data-tact="${a.id}"><td>${esc(new Date(a.start).toLocaleDateString('es'))}</td><td>${esc(TL[d.id].name)}</td><td>${r && !r.error ? esc(r.headline) : '—'}</td><td class="muted">${esc(a.name)}</td></tr>`; }).join('');
-  return `<div class="card"><h2>Analizar un test</h2><div class="row"><div style="flex:1;min-width:220px"><label>Sesión</label><select id="tAct">${actOpts}</select></div><div style="flex:1;min-width:220px"><label>Tipo de test</label><select id="tTest">${testOpts}</select></div></div>
+  const RV = TestLab.review(list, at.profile || {}, profileOf(at.id));
+  const rvTag = { alta: 'Señal fuerte', media: 'Señal moderada', info: 'Info' }, rvCls = { alta: 'bad', media: 'warn', info: 'info' };
+  const rvCard = RV ? `<div class="card"><h2>¿Toca repetir un test?</h2><div class="sum ${RV.level}" style="border-top:0;border-right:0;border-bottom:0;padding:8px 14px"><div class="sh" style="margin:0">${esc(RV.headline)}</div></div>
+    ${RV.flags.map(f => `<div class="ins ${rvCls[f.level]}"><span class="tag">${rvTag[f.level]}</span><b>${esc(f.title)}</b>${esc(f.text)}</div>`).join('') || '<p class="muted">No se detectó ninguna señal en las sesiones de las últimas 8 semanas.</p>'}
+    <div class="hint">Se revisan las sesiones de las últimas 8 semanas (y posteriores al último test aplicado): factor de intensidad en 60 min, mejores 20 min de potencia, FC sostenida, ritmos de carrera y natación, y la antigüedad del test. Son indicios, no una prueba: un esfuerzo puntual no equivale a un test.</div></div>` : '';
+  return `${rvCard}<div class="card"><h2>Analizar un test</h2><div class="row"><div style="flex:1;min-width:220px"><label>Sesión</label><select id="tAct">${actOpts}</select></div><div style="flex:1;min-width:220px"><label>Tipo de test</label><select id="tTest">${testOpts}</select></div></div>
     <div style="margin-top:10px">${detTxt}</div></div>${res}
     ${hist ? `<div class="card"><h2>Tests detectados de ${esc(at.name)}</h2><div class="tw"><table><tr><th>Fecha</th><th>Test</th><th>Resultado</th><th>Archivo</th></tr>${hist}</table></div></div>` : ''}
     <div class="card"><h2>Subir más sesiones</h2>${dropzone()}</div>`;
@@ -368,6 +374,7 @@ function viewPerfil() {
   return head + `<div class="card"><h2>Datos de ${esc(at.name)}</h2><p class="muted" style="margin-top:0">Estos valores definen las zonas y la carga de este deportista. Los campos vacíos se estiman. Al guardar se recalculan sus sesiones.</p>
     <div class="form"><div><label>Nombre</label><input id="p_name" value="${esc(at.name)}"></div></div><div style="height:12px"></div>
     ${athleteFields(p, { hr: true, ftp: true, obs })}
+    ${(() => { const d = p.tDate || {}, L = [['FTP', d.ftp, p.ftp ? p.ftp + ' W' : ''], ['FC umbral', d.lthr, p.lthr ? p.lthr + ' ppm' : ''], ['Umbral de carrera', d.runThr, p.runThr ? TestLab.fmtPace(p.runThr) + ' /km' : ''], ['Umbral de natación', d.swimThr, p.swimThr ? TestLab.fmtPace(p.swimThr) + ' /100 m' : '']].filter(x => x[1]); return L.length ? `<div class="hint" style="margin-top:12px"><b>Último test aplicado:</b> ${L.map(x => x[0] + ' ' + esc(x[2]) + ' (' + new Date(x[1]).toLocaleDateString('es') + ')').join(' · ')}</div>` : ''; })()}
     <div class="row" style="margin-top:14px"><button class="btn primary" id="saveProf">Guardar y recalcular</button></div></div>`;
 }
 
@@ -428,7 +435,8 @@ function bind() {
   document.querySelectorAll('[data-gotest]').forEach(l => l.onclick = e => { e.preventDefault(); state.tAct = l.dataset.gotest; state.tTest = 'auto'; state.tStep = null; setTab('tests'); });
   const ap = $('applyTest'); if (ap) ap.onclick = () => {
     if (!lastTest || lastTest.R.invalid) return; const at = state.athletes.find(x => x.id === lastTest.ath), v = lastTest.R.apply, clean = {}; for (const k in v) if (v[k] != null && isFinite(v[k])) clean[k] = v[k];
-    at.profile = Object.assign({}, at.profile, clean); saveAthletes(); analyzeAthlete(at.id); toast('Perfil de ' + at.name + ' actualizado con el resultado del test. Sesiones recalculadas.'); render();
+    const dk = { ftp: 'ftp', lthr: 'lthr', runThr: 'runThr', swimThr: 'swimThr' }, td = Object.assign({}, (at.profile || {}).tDate); for (const k in clean) if (dk[k]) td[dk[k]] = lastTest.start;
+    at.profile = Object.assign({}, at.profile, clean, { tDate: td }); saveAthletes(); analyzeAthlete(at.id); toast('Perfil de ' + at.name + ' actualizado con el resultado del test. Sesiones recalculadas.'); render();
   };
   const sa = $('selAct'); if (sa) sa.onchange = () => { state.sel = sa.value; render(); };
   const ss = $('selSport'); if (ss) ss.onchange = async () => { const a = state.acts.find(x => x.id === state.sel); a.sport = ss.value; analyzeAthlete(a.ath); await persist(a); render(); };

@@ -1,4 +1,4 @@
-const CACHE = "threshold-analytics-v11";
+const CACHE = "threshold-analytics-v12";
 const ASSETS = ["./", "./index.html", "./core.js", "./charts.js", "./tests.js", "./app.js", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", e => {

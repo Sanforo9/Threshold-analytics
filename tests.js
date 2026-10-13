@@ -42,6 +42,14 @@ function cvOf(arr, s, e, w = 60) { // variación de la señal suavizada dentro d
   for (let i = 0; i + w <= seg.length; i += 10) out.push(mean(seg.slice(i, i + w)));
   const m = mean(out); return m > 0 ? sdev(out) / m : NaN;
 }
+// duración (s) de la meseta continua alrededor de una ventana: un test es un esfuerzo acotado, no parte de una salida larga y pareja
+function extent(arr, w, frac = 0.92) {
+  const thr = w.avg * frac, n = arr.length, m = (a, b) => { let sum = 0, c = 0; for (let i = Math.max(0, a); i < Math.min(n, b); i++) if (isNum(arr[i])) { sum += arr[i]; c++; } return c ? sum / c : NaN; };
+  let a = w.s, b = w.e;
+  while (a > 0 && m(a - 60, a) >= thr) a -= 30;
+  while (b < n && m(b, b + 60) >= thr) b += 30;
+  return b - a;
+}
 function outsideMean(arr, s, e, minV) {
   let sum = 0, c = 0; for (let i = 0; i < arr.length; i++) { if (i >= s && i < e) continue; const v = arr[i]; if (isNum(v) && v > minV) { sum += v; c++; } }
   return c ? sum / c : NaN;
@@ -249,6 +257,72 @@ function compute(id, rs, P, opts) {
   return R;
 }
 
+
+/* ---------- ¿hay indicios de que toca repetir un test? ---------- */
+function mmOf(act) {
+  if (act._mm && act._mm.rs === act.rs && act._mm.sport === act.sport) return act._mm;
+  const rs = act.rs, s = rs.s, m = { rs, sport: act.sport, p20: NaN, p60: NaN, np60: NaN, hr20: NaN, run20: NaN, sw400: NaN };
+  if (s.hr) { const h = bestWindow(s.hr, 1200, 0.9); if (h) m.hr20 = h.avg; }
+  if (act.sport === 'bike' && act.A && act.A.hasPw) {
+    const w20 = bestWindow(s.pw, 1200, 0.9); if (w20) m.p20 = w20.avg;
+    if (rs.n >= 3600) { const w60 = bestWindow(s.pw, 3600, 0.9); if (w60) { m.p60 = w60.avg; m.np60 = C.normalizedPower(s.pw.slice(w60.s, w60.e)); } }
+  }
+  if (act.sport === 'run' && act.A && act.A.hasSp) { const w = speedWindow(rs, 1200); if (w && w.avg > 0.5) m.run20 = 1000 / w.avg; }
+  if (act.sport === 'swim') { const b = swimBlocks(rs).filter(x => x.dist >= 380 && x.dist <= 440).sort((x, y) => x.pace - y.pace)[0]; if (b) m.sw400 = b.pace; }
+  act._mm = m; return m;
+}
+const dstr = ms => new Date(ms).toLocaleDateString('es', { day: 'numeric', month: 'short' });
+// evidencia de FTP desactualizado en una sola sesión (para el aviso de la sesión)
+function sessionFtpEvidence(act, ftp) {
+  if (!(ftp > 0) || act.sport !== 'bike') return null;
+  const m = mmOf(act), out = {};
+  if (isNum(m.np60)) out.if60 = m.np60 / ftp;
+  if (isNum(m.p20)) out.est20 = m.p20 * 0.95;
+  const lvl = (out.if60 >= 1.0) ? 'alta' : (out.est20 >= ftp * 1.06) ? 'alta' : (out.est20 >= ftp * 1.03) ? 'media' : null;
+  if (!lvl) return null;
+  const txt = out.if60 >= 1.0 ? 'Sostuvo ' + nf(m.np60) + ' W (NP) durante 60 min, un factor de intensidad de ' + nf(out.if60, 2) + ' con el FTP de ' + nf(ftp) + ' W.'
+    : 'Sus mejores 20 min (' + nf(m.p20) + ' W) equivalen a un FTP de ~' + nf(out.est20) + ' W, un ' + nf((out.est20 / ftp - 1) * 100) + ' % más que el FTP de ' + nf(ftp) + ' W.';
+  return { level: lvl, text: txt };
+}
+function review(acts, raw, P) {
+  // acts: sesiones del deportista (con .A), raw: perfil guardado, P: perfil normalizado
+  const list = acts.filter(a => a.A).sort((a, b) => a.start - b.start), res = { flags: [], level: 'ok', headline: '', conclusive: false };
+  if (!list.length) return null;
+  const last = list[list.length - 1].start, td = raw.tDate || {}, DAY = 864e5;
+  const recent = (a, since) => a.start >= last - 56 * DAY && a.start >= (since || 0);
+  const flag = (level, title, text) => res.flags.push({ level, title, text });
+  // 1) FTP en ciclismo
+  const bikes = list.filter(a => a.sport === 'bike' && a.A.hasPw && recent(a, td.ftp));
+  if (P.ftp > 0) {
+    let strongest = null, hard = false;
+    for (const a of bikes) {
+      const e = sessionFtpEvidence(a, P.ftp), m = mmOf(a);
+      if (isNum(m.p20) && m.p20 * 0.95 >= P.ftp * 0.9) hard = true;
+      if (e && (!strongest || (e.level === 'alta' && strongest.e.level !== 'alta'))) strongest = { a, e };
+    }
+    if (strongest) flag(strongest.e.level, 'FTP posiblemente bajo', 'Sesión del ' + dstr(strongest.a.start) + ': ' + strongest.e.text + (strongest.e.level === 'alta' ? ' Es una señal fuerte: conviene repetir el test.' : ' Es una señal moderada: si se repite en otra sesión, repetir el test.'));
+    if (hard) res.conclusive = true;
+    else if (bikes.length) flag('info', 'Sin esfuerzos exigentes en ciclismo', 'En las últimas semanas no hubo ningún esfuerzo de 20 min cerca del FTP, así que no se puede confirmar si el FTP sigue vigente.');
+  } else if (list.some(a => a.sport === 'bike' && a.A.hasPw)) flag('info', 'Sin FTP en el perfil', 'Hay sesiones de ciclismo con potencia pero el deportista no tiene FTP guardado. Un test (pestaña Tests) permite calcular la carga con potencia.');
+  // 2) FC umbral y FC máxima
+  if (!P.lthrAuto) {
+    const hs = list.filter(a => recent(a, td.lthr) && a.A.hasHr).map(a => ({ a, v: mmOf(a).hr20 })).filter(x => isNum(x.v)).sort((x, y) => y.v - x.v)[0];
+    if (hs && hs.v >= P.lthr * 1.05) flag('media', 'FC umbral posiblemente baja', 'Sesión del ' + dstr(hs.a.start) + ': mantuvo ' + nf(hs.v) + ' ppm de media durante 20 min, un ' + nf((hs.v / P.lthr - 1) * 100) + ' % por encima de la FC umbral guardada (' + nf(P.lthr) + ' ppm). Puede deberse a calor o deshidratación, pero si se repite conviene repetir el test.');
+  }
+  if (!P.hrMaxAuto) { const mx = list.filter(a => a.A.hasHr && recent(a)).map(a => a.A.maxHr).filter(isNum).sort((x, y) => y - x)[0]; if (isNum(mx) && mx >= P.hrMax + 3) flag('info', 'FC máxima superada', 'Se registró ' + nf(mx) + ' ppm, por encima de la FC máxima guardada (' + nf(P.hrMax) + ' ppm). Actualízala en el perfil: cambia las zonas.'); }
+  // 3) running y natación
+  if (raw.runThr > 0) { const r = list.filter(a => a.sport === 'run' && recent(a, td.runThr)).map(a => ({ a, v: mmOf(a).run20 })).filter(x => isNum(x.v)).sort((x, y) => x.v - y.v)[0]; if (r && r.v * 1.05 < raw.runThr * 0.99) flag(r.v * 1.05 < raw.runThr * 0.96 ? 'alta' : 'media', 'Umbral de carrera posiblemente lento', 'Sesión del ' + dstr(r.a.start) + ': sus mejores 20 min fueron a ' + fmtPace(r.v) + ' /km, lo que equivale a un umbral de ' + fmtPace(r.v * 1.05) + ' /km, más rápido que el guardado (' + fmtPace(raw.runThr) + ' /km).'); }
+  if (raw.swimThr > 0) { const r = list.filter(a => a.sport === 'swim' && recent(a, td.swimThr)).map(a => ({ a, v: mmOf(a).sw400 })).filter(x => isNum(x.v)).sort((x, y) => x.v - y.v)[0]; if (r && r.v < raw.swimThr * 0.97) flag('media', 'Umbral de natación posiblemente lento', 'Sesión del ' + dstr(r.a.start) + ': nadó 400 m continuos a ' + fmtPace(r.v) + ' /100 m, más rápido que el umbral guardado (' + fmtPace(raw.swimThr) + ' /100 m).'); }
+  // 4) antigüedad del último test
+  const dates = [['FTP', td.ftp], ['FC umbral', td.lthr], ['umbral de carrera', td.runThr], ['umbral de natación', td.swimThr]].filter(x => x[1]);
+  if (dates.length) { const oldest = dates.sort((x, y) => x[1] - y[1])[0], wk = (last - oldest[1]) / (7 * DAY); if (wk >= 8) flag('media', 'Hace ' + nf(wk) + ' semanas del último test', 'El último test de ' + oldest[0] + ' fue el ' + new Date(oldest[1]).toLocaleDateString('es') + '. Lo habitual es repetirlo cada 6-8 semanas, al cerrar un bloque de entrenamiento.'); else if (wk >= 6) flag('info', 'Se acerca la fecha de repetir el test', 'Han pasado ' + nf(wk) + ' semanas desde el último test de ' + oldest[0] + '.'); }
+  else if (P.ftp > 0 || raw.runThr > 0 || raw.swimThr > 0) flag('info', 'Fecha del último test desconocida', 'Al aplicar un test desde la pestaña Tests se guarda su fecha y la app podrá avisar cuándo toca repetirlo.');
+  const hi = res.flags.filter(f => f.level === 'alta').length, mid = res.flags.filter(f => f.level === 'media').length;
+  res.level = hi ? 'bad' : mid >= 2 ? 'bad' : mid ? 'warn' : 'ok';
+  res.headline = res.level === 'bad' ? 'Conviene repetir el test' : res.level === 'warn' ? 'Hay indicios moderados: vigila o programa un test' : (res.conclusive || !res.flags.some(f => f.level === 'info' && /Sin esfuerzos/.test(f.title)) ? 'Sin indicios de que haya que actualizar los valores' : 'Sin indicios, pero sin esfuerzos exigentes que lo confirmen');
+  return res;
+}
+
 /* ---------- detección: ¿qué test es esta sesión? ---------- */
 function detect(rs, sport, A) {
   const s = rs.s, n = rs.n, out = [];
@@ -259,7 +333,7 @@ function detect(rs, sport, A) {
     if (w20) {
       const rest = outsideMean(s.pw, w20.s, w20.e, 30), ratio = w20.avg / rest, cv = cvOf(s.pw, w20.s, w20.e), r8 = w8 ? w8.avg / w20.avg : 9;
       const score = clamp((ratio - 1.05) / 0.25, 0, 1) * 0.4 + (cv <= 0.1 ? 0.3 : cv <= 0.16 ? 0.15 : 0) + (r8 <= 1.07 ? 0.3 : 0);
-      push('bike_20', (ratio >= 1.1 && cv <= 0.16) ? score : score * 0.4, 'Un esfuerzo continuo y parejo de 20 min (' + nf(w20.avg) + ' W, ' + nf(ratio, 2) + '× el resto de la sesión).');
+      push('bike_20', (ratio >= 1.1 && cv <= 0.16 && extent(s.pw, w20) <= 1500) ? score : score * 0.3, 'Un esfuerzo continuo y parejo de 20 min (' + nf(w20.avg) + ' W, ' + nf(ratio, 2) + '× el resto de la sesión).');
     }
     if (w8) {
       const A1 = bestWindow(s.pw, 480, 0.9, 0, w8.s - 150, Pf), B1 = bestWindow(s.pw, 480, 0.9, w8.e + 150, n, Pf);
@@ -267,7 +341,7 @@ function detect(rs, sport, A) {
       if (w2) {
         const r = w8.s < w2.s ? [w8, w2] : [w2, w8], gapMean = winMean(s.pw, r[0].e, r[1].s), mn = Math.min(r[0].avg, r[1].avg), mx = Math.max(r[0].avg, r[1].avg);
         const rest = (() => { let sum = 0, c = 0; for (let i = 0; i < n; i++) { const v = s.pw[i]; if (isNum(v) && v > 30 && !(i >= r[0].s && i < r[0].e) && !(i >= r[1].s && i < r[1].e)) { sum += v; c++; } } return c ? sum / c : NaN; })();
-        const similar = mx / mn <= 1.12, recov = gapMean <= 0.85 * mn, ratio = mn / rest;
+        const similar = mx / mn <= 1.12, recov = gapMean <= 0.85 * mn && extent(s.pw, r[0]) <= 660 && extent(s.pw, r[1]) <= 660, ratio = mn / rest;
         const cvOk = cvOf(s.pw, r[0].s, r[0].e) <= 0.12 && cvOf(s.pw, r[1].s, r[1].e) <= 0.12;
         const score = (similar ? 0.25 : 0) + (recov ? 0.3 : 0) + clamp((ratio - 1.05) / 0.25, 0, 1) * 0.25 + (cvOk ? 0.2 : 0);
         // si hay un esfuerzo de 20 min que lo explica mejor, no es 2×8
@@ -286,7 +360,8 @@ function detect(rs, sport, A) {
       const q = (w, L) => {
         const ratio = w.avg / restOf(w), cv = cvOf(s.sp, w.s, w.e), before = winMean(s.sp, w.s - 90, w.s - 10), after = winMean(s.sp, w.e + 10, w.e + 90);
         const cliff = (isNum(before) && before < 0.92 * w.avg ? 0.5 : 0) + (!isNum(after) || after < 0.92 * w.avg ? 0.5 : 0);
-        return clamp((ratio - 1.05) / 0.25, 0, 1) * 0.4 + (cv <= 0.12 ? 0.2 : 0) + cliff * 0.2;
+        const sc = clamp((ratio - 1.05) / 0.25, 0, 1) * 0.4 + (cv <= 0.12 ? 0.2 : 0) + cliff * 0.2;
+        return extent(s.sp, w) <= L * 1.25 ? sc : sc * 0.3;
       };
       const q12 = q(w12, 720), q20 = q(w20, 1200);
       push('run_12', q12 + (r >= 1.06 ? 0.2 : r >= 1.045 ? 0.08 : 0), 'Esfuerzo continuo de 12 min a ' + fmtPace(1000 / w12.avg) + ' /km; los 20 min no se sostienen a ese ritmo.');
@@ -301,6 +376,6 @@ function detect(rs, sport, A) {
   return out.sort((a, b) => b.score - a.score);
 }
 
-const TestLab = { TESTS, detect, compute, fmtPace, fmtT, detectSteps, bestWindow, swimBlocks };
+const TestLab = { review, sessionFtpEvidence, TESTS, detect, compute, fmtPace, fmtT, detectSteps, bestWindow, swimBlocks };
 if (typeof module !== 'undefined' && module.exports) module.exports = TestLab; else root.TestLab = TestLab;
 })(typeof window !== 'undefined' ? window : globalThis);
